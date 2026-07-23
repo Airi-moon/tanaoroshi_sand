@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>棚卸しスキャン</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root {
+    --accent: #b8860b;
+    --accent-bg: #fdf6e3;
+    --arrival: #1a7f37; --biz: #0969da; --transfer: #9a6700; --stocktake: #8250df;
+    --border: #ddd;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; background: #f6f6f4; color: #222; padding-bottom: 70px; }
+
+  header { background: var(--accent-bg); border-bottom: 2px solid var(--accent); padding: 10px 12px; position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 16px; color: #6b4e00; display: flex; align-items: center; gap: 6px; }
+  .head-row { display: flex; gap: 8px; margin-top: 8px; }
+  .head-row select, .head-row input { flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; background: #fff; }
+
+  #demoBanner { display: none; background: #fff3cd; color: #7a5b00; font-size: 12px; text-align: center; padding: 4px; }
+
+  .modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 10px 12px 0; }
+  .modes button { padding: 12px 4px; font-size: 14px; font-weight: 700; border: 2px solid var(--border); border-radius: 10px; background: #fff; color: #555; }
+  .modes button.active[data-mode="入荷"] { border-color: var(--arrival); color: var(--arrival); background: #e8f5ec; }
+  .modes button.active[data-mode="業務転用"] { border-color: var(--biz); color: var(--biz); background: #e7f0fb; }
+  .modes button.active[data-mode="譲渡"] { border-color: var(--transfer); color: var(--transfer); background: #fdf3d7; }
+  .modes button.active[data-mode="棚卸"] { border-color: var(--stocktake); color: var(--stocktake); background: #f1eafd; }
+
+  .tabs { display: flex; gap: 4px; padding: 10px 12px 0; }
+  .tabs button { flex: 1; padding: 9px 0; font-size: 13px; border: none; border-bottom: 3px solid transparent; background: none; color: #777; }
+  .tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+
+  .panel { display: none; padding: 12px; }
+  .panel.active { display: block; }
+
+  #reader { width: 100%; border-radius: 12px; overflow: hidden; background: #000; min-height: 60px; }
+  .big-btn { width: 100%; padding: 14px; font-size: 16px; font-weight: 700; border: none; border-radius: 12px; background: var(--accent); color: #fff; margin-top: 10px; }
+  .big-btn.stop { background: #888; }
+  .hint { font-size: 12px; color: #888; margin-top: 8px; text-align: center; }
+
+  #searchBox { width: 100%; padding: 12px; font-size: 16px; border: 1px solid var(--border); border-radius: 10px; }
+  .plist { margin-top: 10px; }
+  .pitem { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+  .pitem .nm { font-size: 14px; font-weight: 600; }
+  .pitem .sub { font-size: 11px; color: #888; margin-top: 2px; }
+  .pitem .stk { font-size: 13px; color: #555; white-space: nowrap; margin-left: 8px; }
+
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; font-size: 13px; }
+  th, td { padding: 9px 10px; border-bottom: 1px solid #eee; text-align: left; }
+  th { background: var(--accent-bg); color: #6b4e00; font-size: 12px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .hitem { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; font-size: 13px; }
+  .hitem.cancelled { opacity: .45; text-decoration: line-through; }
+  .hitem .top { display: flex; justify-content: space-between; align-items: center; }
+  .badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; color: #fff; }
+  .badge.入荷 { background: var(--arrival); } .badge.業務転用 { background: var(--biz); }
+  .badge.譲渡 { background: var(--transfer); } .badge.棚卸 { background: var(--stocktake); }
+  .hitem .cxl { border: 1px solid #d33; color: #d33; background: none; border-radius: 8px; padding: 3px 10px; font-size: 12px; }
+  .hitem .meta { color: #888; font-size: 11px; margin-top: 4px; }
+
+  /* 確認シート（下からのモーダル） */
+  #overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 20; }
+  #sheet { display: none; position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-radius: 18px 18px 0 0; padding: 18px 16px 26px; z-index: 21; max-height: 85vh; overflow-y: auto; }
+  #sheet h2 { font-size: 15px; margin-bottom: 4px; }
+  #sheet .code { font-size: 12px; color: #888; margin-bottom: 12px; }
+  .qty-row { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 14px 0; }
+  .qty-row button { width: 52px; height: 52px; font-size: 26px; border-radius: 50%; border: 2px solid var(--accent); background: #fff; color: var(--accent); }
+  .qty-row input { width: 90px; text-align: center; font-size: 30px; font-weight: 700; border: none; border-bottom: 2px solid var(--border); }
+  .field { margin: 10px 0; }
+  .field label { font-size: 12px; color: #777; display: block; margin-bottom: 4px; }
+  .field select, .field input { width: 100%; padding: 10px; font-size: 15px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+  .theo { background: #f1eafd; border-radius: 8px; padding: 8px 12px; font-size: 13px; color: #4a2d87; margin: 8px 0; }
+  .unit-row { display: flex; gap: 8px; }
+  .unit-row button { flex: 1; padding: 10px; font-size: 14px; font-weight: 700; border: 2px solid var(--border); border-radius: 8px; background: #fff; color: #666; }
+  .unit-row button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+  #boxCalc { font-size: 13px; color: #1a7f37; font-weight: 700; text-align: center; margin-top: 6px; min-height: 18px; }
+  .sheet-btns { display: flex; gap: 10px; margin-top: 14px; }
+  .sheet-btns button { flex: 1; padding: 14px; font-size: 16px; font-weight: 700; border-radius: 12px; border: none; }
+  .sheet-btns .save { background: var(--accent); color: #fff; }
+  .sheet-btns .cancel { background: #eee; color: #555; }
+
+  #toast { position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 14px; opacity: 0; transition: opacity .3s; z-index: 30; pointer-events: none; white-space: nowrap; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="demoBanner">⚠ デモモード：データはこの端末のブラウザ内のみに保存されます（GASにデプロイすると本番モード）</div>
+
+<header>
+  <h1>📦 棚卸しスキャン <span id="connBadge" style="font-size:11px;font-weight:400;color:#999;"></span></h1>
+  <div class="head-row">
+    <select id="storeSel"></select>
+    <select id="staffSel"></select>
+  </div>
+  <div class="head-row" id="staffFreeRow" style="display:none">
+    <input id="staffInput" placeholder="担当者名を入力">
+  </div>
+</header>
+
+<div class="modes">
+  <button data-mode="入荷" class="active">📥 入荷</button>
+  <button data-mode="業務転用">🧴 業務転用</button>
+  <button data-mode="譲渡">🔁 譲渡</button>
+  <button data-mode="棚卸">📋 棚卸</button>
+</div>
+
+<div class="tabs">
+  <button data-tab="scan" class="active">スキャン</button>
+  <button data-tab="search">商品検索</button>
+  <button data-tab="stock">在庫</button>
+  <button data-tab="history">履歴</button>
+</div>
+
+<div id="panel-scan" class="panel active">
+  <div id="reader"></div>
+  <button id="photoBtn" class="big-btn">📸 写真を撮って読み取り</button>
+  <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
+  <button id="camBtn" class="big-btn" style="background:#777">📷 ライブカメラでスキャン</button>
+  <p class="hint">JAN（バーコード）・QRコードに対応。「📸 写真を撮って読み取り」はどの環境でも動きます（バーコード全体が大きく写るように撮影）。ライブカメラはGoogleの仕様変更によりGAS上では使えない場合があります。バーコードの無い商品は「商品検索」タブから。</p>
+</div>
+
+<div id="panel-search" class="panel">
+  <input id="searchBox" placeholder="商品番号・商品名・JANで検索" autocomplete="off">
+  <div id="productList" class="plist"></div>
+</div>
+
+<div id="panel-stock" class="panel">
+  <table>
+    <thead><tr><th>商品</th><th style="text-align:right">現在庫</th></tr></thead>
+    <tbody id="stockBody"></tbody>
+  </table>
+  <p class="hint">入荷 +、業務転用/譲渡出 −、譲渡入 +。販売はサロンボードの売上履歴で管理するためここでは記録しません。棚卸を記録するとその実数に補正されます。</p>
+</div>
+
+<div id="panel-history" class="panel">
+  <div id="historyList"></div>
+</div>
+
+<div id="overlay"></div>
+<div id="sheet">
+  <h2 id="shName"></h2>
+  <div class="code" id="shCode"></div>
+  <div id="shTheo" class="theo" style="display:none"></div>
+  <div class="field" id="unitField" style="display:none">
+    <label>単位（箱ごと入荷するときは「箱」を選択）</label>
+    <div class="unit-row">
+      <button type="button" id="unitPiece" class="active">個</button>
+      <button type="button" id="unitBox">箱</button>
+    </div>
+  </div>
+  <div class="qty-row">
+    <button id="qMinus">−</button>
+    <input id="qtyInput" type="number" inputmode="numeric" value="1" min="0">
+    <button id="qPlus">＋</button>
+  </div>
+  <div id="boxCalc"></div>
+  <div class="field" id="toStoreField" style="display:none">
+    <label>譲渡先の店舗</label>
+    <select id="toStoreSel"></select>
+  </div>
+  <div class="field" id="regFields" style="display:none">
+    <label>未登録の商品です。マスタに登録します：</label>
+    <input id="regNo" placeholder="商品番号（例: S010）" style="margin-bottom:6px">
+    <input id="regName" placeholder="商品名" style="margin-bottom:6px">
+    <input id="regBox" type="number" inputmode="numeric" min="0" placeholder="1箱あたりの個数（箱で入荷する商品のみ・任意）">
+  </div>
+  <div class="field">
+    <label>メモ（任意）</label>
+    <input id="memoInput" placeholder="">
+  </div>
+  <div class="sheet-btns">
+    <button class="cancel" id="shCancel">キャンセル</button>
+    <button class="save" id="shSave"></button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+const hasGAS = typeof google !== 'undefined' && google.script && google.script.run;
+
+// 画面をGitHub Pages等の外部に置く場合は、ここにGASの「ウェブアプリURL（/execで終わる）」を貼る
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbyfJkmA291eDgxk3HmUNML1ZBo3eMqlXk_HHsK2-bI3Xe7rczcMayreaBiHB3Kj7Y6A/exec';
+
+// ================= デモ用バックエンド（GASが無い場合） =================
+const demo = {
+  key: 'tanaoroshi-demo-v4',
+  load() {
+    const d = localStorage.getItem(this.key);
+    if (d) return JSON.parse(d);
+    return {
+      products: [
+        { productNo: 'S001', jan: '4901234567894', name: 'シャンプー 300ml', category: 'ヘアケア', price: 2800, boxQty: 10 },
+        { productNo: 'S002', jan: '4901234567900', name: 'トリートメント 250g', category: 'ヘアケア', price: 3200, boxQty: 8 },
+        { productNo: 'S003', jan: '', name: 'ヘアオイル 100ml（バーコード無し）', category: 'スタイリング', price: 2400, boxQty: 0 }
+      ],
+      stores: [
+        'sand 銀座 【サンド ギンザ】',
+        'sand 表参道 【サンド オモテサンドウ】',
+        'sand S 銀座 【サンド エス ギンザ】',
+        'sand Scene 【サンド シーン】',
+        'sand clear 横浜本店',
+        'sand大阪梅田 【サンド】',
+        'sand 池袋 【サンド】',
+        'sand 名古屋 【サンド】',
+        'sand mieu 横浜',
+        'sand 池袋 2nd',
+        'sand Hearts ginza 銀座 【サンド ハーツ】',
+        'sand yena 横浜',
+        'sand Leo 新宿'
+      ],
+      assistants: [
+        { store: 'sand 銀座 【サンド ギンザ】', name: '佐藤 花子' },
+        { store: 'sand 銀座 【サンド ギンザ】', name: '鈴木 太郎' },
+        { store: 'sand 表参道 【サンド オモテサンドウ】', name: '田中 美咲' },
+        { store: 'sand 表参道 【サンド オモテサンドウ】', name: '高橋 健' },
+        { store: 'sand clear 横浜本店', name: '伊藤 さくら' }
+      ],
+      logs: []
+    };
+  },
+  save(d) { localStorage.setItem(this.key, JSON.stringify(d)); },
+  getInitData() { return this.load(); },
+  saveRecord(rec) {
+    const d = this.load();
+    rec.row = d.logs.length + 2;
+    rec.ts = new Date().toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    rec.cancelled = false;
+    d.logs.push(rec);
+    this.save(d);
+    return { row: rec.row, ts: rec.ts };
+  },
+  cancelRecord(row) {
+    const d = this.load();
+    const l = d.logs.find(x => x.row === row);
+    if (l) l.cancelled = true;
+    this.save(d);
+    return true;
+  },
+  registerProduct(p) {
+    const d = this.load();
+    d.products.push(p);
+    this.save(d);
+    return true;
+  }
+};
+
+function api(fn, ...args) {
+  if (hasGAS) {
+    return new Promise((resolve, reject) => {
+      google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](...args);
+    });
+  }
+  if (GAS_API_URL) {
+    return fetch(GAS_API_URL, { method: 'POST', body: JSON.stringify({ action: fn, payload: args[0] }) })
+      .then(r => r.json())
+      .then(d => { if (d && d.error) throw new Error(d.error); return d; });
+  }
+  return new Promise((resolve, reject) => {
+    try { resolve(demo[fn](...args)); } catch (e) { reject(e); }
+  });
+}
+
+// ================= 状態 =================
+let S = { products: [], stores: [], logs: [] };
+let mode = '入荷';
+let scanner = null, scanning = false, lastCode = '', lastCodeAt = 0;
+let current = null; // 確認シートに出している商品 {product, jan, isNew}
+let unit = 'piece'; // 'piece'（個）| 'box'（箱）
+
+const $ = id => document.getElementById(id);
+
+// ================= 初期化 =================
+async function init() {
+  const isDemo = !hasGAS && !GAS_API_URL;
+  if (isDemo) $('demoBanner').style.display = 'block';
+  $('connBadge').textContent = isDemo ? '(デモ)' : '';
+  try {
+    S = await api('getInitData');
+  } catch (e) { toast('読み込みエラー: ' + e.message); return; }
+  const saved = localStorage.getItem('tanaoroshi-store');
+  $('storeSel').innerHTML = S.stores.map(s => `<option${s === saved ? ' selected' : ''}>${esc(s)}</option>`).join('');
+  populateStaff();
+  renderAll();
+}
+init();
+
+$('storeSel').onchange = () => { localStorage.setItem('tanaoroshi-store', $('storeSel').value); populateStaff(); renderAll(); };
+
+// ---- 担当者プルダウン（選択中の店舗の担当者だけを表示） ----
+function normStore(s) { return String(s).replace(/[\s　]/g, '').replace(/【.*?】/g, ''); }
+
+function staffForStore(store) {
+  const all = S.assistants || [];
+  const ns = normStore(store);
+  // 1) 完全一致（salonIdで紐づいた正確な店舗名はここでヒットする）
+  let mine = all.filter(a => normStore(a.store) === ns).map(a => a.name);
+  // 2) 一致なしなら部分一致（「銀座」のような短縮表記の保険）
+  if (!mine.length) {
+    mine = all.filter(a => {
+      const na = normStore(a.store);
+      return na.includes(ns) || ns.includes(na);
+    }).map(a => a.name);
+  }
+  // 3) それでも無ければ全員を表示（名前が見つからないよりまし）
+  return [...new Set(mine.length ? mine : all.map(a => a.name))];
+}
+
+function populateStaff() {
+  const names = staffForStore($('storeSel').value);
+  const saved = localStorage.getItem('tanaoroshi-staff') || '';
+  $('staffSel').innerHTML =
+    '<option value="">担当者を選択</option>' +
+    names.map(n => `<option${n === saved ? ' selected' : ''}>${esc(n)}</option>`).join('') +
+    '<option value="__free__">✏️ 直接入力…</option>';
+  if (saved && !names.includes(saved)) {
+    $('staffSel').value = '__free__';
+    $('staffFreeRow').style.display = 'flex';
+    $('staffInput').value = saved;
+  } else {
+    $('staffFreeRow').style.display = 'none';
+  }
+}
+
+$('staffSel').onchange = () => {
+  if ($('staffSel').value === '__free__') {
+    $('staffFreeRow').style.display = 'flex';
+    $('staffInput').focus();
+  } else {
+    $('staffFreeRow').style.display = 'none';
+    localStorage.setItem('tanaoroshi-staff', $('staffSel').value);
+  }
+};
+$('staffInput').onchange = () => localStorage.setItem('tanaoroshi-staff', $('staffInput').value.trim());
+
+function staffValue() {
+  return $('staffSel').value === '__free__' ? $('staffInput').value.trim() : $('staffSel').value;
+}
+
+// ================= モード / タブ =================
+document.querySelectorAll('.modes button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.modes button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  mode = b.dataset.mode;
+});
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  $('panel-' + b.dataset.tab).classList.add('active');
+  if (b.dataset.tab === 'stock') renderStock();
+  if (b.dataset.tab === 'history') renderHistory();
+  if (b.dataset.tab === 'search') renderProductList($('searchBox').value);
+});
+
+// ================= 写真を撮って読み取り（どの環境でも動く） =================
+const SCAN_FORMATS_ = () => [
+  Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+  Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39,
+  Html5QrcodeSupportedFormats.QR_CODE
+];
+
+$('photoBtn').onclick = () => $('photoInput').click();
+$('photoInput').onchange = async () => {
+  const f = $('photoInput').files[0];
+  $('photoInput').value = '';
+  if (!f) return;
+  if (scanning) await stopScan();
+  $('photoBtn').textContent = '⏳ 読み取り中…';
+  $('photoBtn').disabled = true;
+  const fileScanner = new Html5Qrcode('reader', { formatsToSupport: SCAN_FORMATS_() });
+  try {
+    const text = await fileScanner.scanFile(f, false);
+    onScan(text);
+  } catch (e) {
+    toast('読み取れませんでした。明るい場所でバーコード全体を大きく写してください');
+  } finally {
+    try { fileScanner.clear(); } catch (e) {}
+    $('photoBtn').textContent = '📸 写真を撮って読み取り';
+    $('photoBtn').disabled = false;
+  }
+};
+
+// ================= ライブカメラスキャン =================
+$('camBtn').onclick = async () => {
+  if (scanning) { await stopScan(); return; }
+  try {
+    scanner = new Html5Qrcode('reader', { formatsToSupport: SCAN_FORMATS_() });
+    await scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 260, height: 140 } },
+      onScan
+    );
+    scanning = true;
+    $('camBtn').textContent = '⏹ カメラを停止';
+    $('camBtn').classList.add('stop');
+  } catch (e) {
+    const msg = String((e && e.name) || e);
+    if (msg.indexOf('NotAllowedError') !== -1) {
+      alert('ライブカメラが使えません。\n\nGoogleの仕様変更（2026年2月〜）により、GAS上のアプリではライブカメラがブロックされています。\n\n→ 上の「📸 写真を撮って読み取り」ボタンをお使いください（こちらはどの環境でも動きます）。\n\nそれ以外の環境でこのエラーが出る場合は、ブラウザのカメラ許可設定を確認するか、LINE等のアプリ内ブラウザではなくSafari/Chromeで直接開いてください。');
+    } else if (msg.indexOf('NotFoundError') !== -1) {
+      alert('カメラが見つかりません。カメラ付きのスマホ・タブレットでお試しください。');
+    } else {
+      toast('カメラを起動できません: ' + msg);
+    }
+  }
+};
+
+async function stopScan() {
+  if (scanner && scanning) { try { await scanner.stop(); scanner.clear(); } catch (e) {} }
+  scanning = false;
+  $('camBtn').textContent = '📷 カメラを起動してスキャン';
+  $('camBtn').classList.remove('stop');
+}
+
+function onScan(code) {
+  const now = Date.now();
+  if (code === lastCode && now - lastCodeAt < 2500) return; // 連続読み取り防止
+  lastCode = code; lastCodeAt = now;
+  beep(); if (navigator.vibrate) navigator.vibrate(80);
+  const p = S.products.find(x => x.jan === code || x.productNo === code);
+  openSheet(p || null, code);
+}
+
+function beep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value = 1400; g.gain.value = .15;
+    o.start(); o.stop(ctx.currentTime + .12);
+  } catch (e) {}
+}
+
+// ================= 商品検索 =================
+$('searchBox').oninput = () => renderProductList($('searchBox').value);
+
+function renderProductList(q) {
+  q = (q || '').trim().toLowerCase();
+  const store = $('storeSel').value;
+  const stock = computeStock();
+  const list = S.products.filter(p =>
+    !q || p.productNo.toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || p.jan.includes(q)
+  ).slice(0, 50);
+  $('productList').innerHTML = list.map((p, i) => `
+    <div class="pitem" data-i="${S.products.indexOf(p)}">
+      <div><div class="nm">${esc(p.name)}</div>
+      <div class="sub">${esc(p.productNo)}${p.jan ? ' / JAN:' + esc(p.jan) : ''}${+p.boxQty > 0 ? ' / 1箱' + (+p.boxQty) + '個' : ''}</div></div>
+      <div class="stk">在庫 ${stock[p.productNo + '|' + store] || 0}</div>
+    </div>`).join('') || '<p class="hint">該当する商品がありません</p>';
+  document.querySelectorAll('.pitem').forEach(el => el.onclick = () => openSheet(S.products[+el.dataset.i], ''));
+}
+
+// ================= 在庫計算 =================
+function computeStock() {
+  const st = {};
+  const k = (no, s) => no + '|' + s;
+  for (const l of S.logs) {
+    if (l.cancelled) continue;
+    if (l.type === '入荷') st[k(l.productNo, l.store)] = (st[k(l.productNo, l.store)] || 0) + l.qty;
+    else if (l.type === '業務転用') st[k(l.productNo, l.store)] = (st[k(l.productNo, l.store)] || 0) - l.qty;
+    else if (l.type === '譲渡') {
+      st[k(l.productNo, l.store)] = (st[k(l.productNo, l.store)] || 0) - l.qty;
+      if (l.toStore) st[k(l.productNo, l.toStore)] = (st[k(l.productNo, l.toStore)] || 0) + l.qty;
+    } else if (l.type === '棚卸') st[k(l.productNo, l.store)] = l.qty; // 実数に補正
+  }
+  return st;
+}
+
+function renderStock() {
+  const store = $('storeSel').value;
+  const stock = computeStock();
+  $('stockBody').innerHTML = S.products.map(p => {
+    const q = stock[p.productNo + '|' + store] || 0;
+    return `<tr><td>${esc(p.name)}<br><span style="font-size:11px;color:#999">${esc(p.productNo)}</span></td>
+      <td class="num" style="${q < 0 ? 'color:#d33;font-weight:700' : ''}">${q}</td></tr>`;
+  }).join('');
+}
+
+// ================= 履歴 =================
+function renderHistory() {
+  const items = S.logs.slice().reverse().slice(0, 30);
+  $('historyList').innerHTML = items.map(l => `
+    <div class="hitem${l.cancelled ? ' cancelled' : ''}">
+      <div class="top">
+        <span><span class="badge ${l.type}">${l.type}</span> <b>${esc(l.name)}</b> × ${l.qty}</span>
+        ${l.cancelled ? '' : `<button class="cxl" data-row="${l.row}">取消</button>`}
+      </div>
+      <div class="meta">${esc(l.ts)}｜${esc(l.store)}${l.toStore ? ' → ' + esc(l.toStore) : ''}${l.diff !== null && l.diff !== undefined && l.type === '棚卸' ? '｜差異 ' + (l.diff > 0 ? '+' : '') + l.diff : ''}${l.staff ? '｜' + esc(l.staff) : ''}</div>
+    </div>`).join('') || '<p class="hint">まだ記録がありません</p>';
+  document.querySelectorAll('.cxl').forEach(b => b.onclick = async () => {
+    if (!confirm('この記録を取り消しますか？')) return;
+    await api('cancelRecord', +b.dataset.row);
+    const l = S.logs.find(x => x.row === +b.dataset.row);
+    if (l) l.cancelled = true;
+    renderHistory(); toast('取り消しました');
+  });
+}
+
+// ================= 単位（個/箱）切り替え =================
+function boxQtyForCurrent() {
+  if (!current) return 0;
+  if (current.isNew) return parseInt($('regBox').value, 10) || 0;
+  return (current.product && +current.product.boxQty) || 0;
+}
+
+function refreshUnitField() {
+  const bq = boxQtyForCurrent();
+  const show = mode !== '棚卸' && bq > 0;
+  $('unitField').style.display = show ? 'block' : 'none';
+  if (!show) unit = 'piece';
+  $('unitBox').textContent = `箱（${bq}個入）`;
+  $('unitPiece').classList.toggle('active', unit === 'piece');
+  $('unitBox').classList.toggle('active', unit === 'box');
+  const q = +$('qtyInput').value || 0;
+  $('boxCalc').textContent = (show && unit === 'box') ? `${q}箱 = 合計 ${q * bq} 個として記録します` : '';
+}
+
+$('unitPiece').onclick = () => { unit = 'piece'; refreshUnitField(); };
+$('unitBox').onclick = () => { unit = 'box'; refreshUnitField(); };
+$('qtyInput').oninput = refreshUnitField;
+$('regBox').oninput = refreshUnitField;
+
+// ================= 確認シート =================
+function openSheet(product, scannedCode) {
+  current = { product, jan: scannedCode, isNew: !product };
+  const store = $('storeSel').value;
+
+  if (product) {
+    $('shName').textContent = product.name;
+    $('shCode').textContent = product.productNo + (product.jan ? ' / JAN:' + product.jan : '');
+    $('regFields').style.display = 'none';
+  } else {
+    $('shName').textContent = '未登録の商品';
+    $('shCode').textContent = 'スキャンしたコード: ' + scannedCode;
+    $('regFields').style.display = 'block';
+    $('regNo').value = ''; $('regName').value = ''; $('regBox').value = '';
+  }
+
+  $('toStoreField').style.display = mode === '譲渡' ? 'block' : 'none';
+  if (mode === '譲渡') {
+    $('toStoreSel').innerHTML = S.stores.filter(s => s !== store).map(s => `<option>${esc(s)}</option>`).join('');
+  }
+
+  if (mode === '棚卸' && product) {
+    const theo = computeStock()[product.productNo + '|' + store] || 0;
+    $('shTheo').style.display = 'block';
+    $('shTheo').textContent = `理論在庫: ${theo} 個 → 数えた実数を入力してください`;
+    $('qtyInput').value = theo;
+  } else if (mode === '業務転用') {
+    $('shTheo').style.display = 'block';
+    $('shTheo').textContent = '店舗販売用 → 業務用への切り替えとして記録します（販売在庫が減ります）';
+    $('qtyInput').value = 1;
+  } else {
+    $('shTheo').style.display = 'none';
+    $('qtyInput').value = 1;
+  }
+
+  $('memoInput').value = '';
+  unit = 'piece';
+  refreshUnitField();
+  $('shSave').textContent = { '入荷': '📥 入荷を記録', '業務転用': '🧴 業務転用を記録', '譲渡': '🔁 譲渡を記録', '棚卸': '📋 実数を記録' }[mode];
+  $('overlay').style.display = 'block';
+  $('sheet').style.display = 'block';
+  if (scanner && scanning) { try { scanner.pause(true); } catch (e) {} }
+}
+
+function closeSheet() {
+  $('overlay').style.display = 'none';
+  $('sheet').style.display = 'none';
+  current = null;
+  if (scanner && scanning) { try { scanner.resume(); } catch (e) {} }
+}
+$('overlay').onclick = closeSheet;
+$('shCancel').onclick = closeSheet;
+$('qMinus').onclick = () => { $('qtyInput').value = Math.max(0, +$('qtyInput').value - 1); refreshUnitField(); };
+$('qPlus').onclick = () => { $('qtyInput').value = +$('qtyInput').value + 1; refreshUnitField(); };
+
+$('shSave').onclick = async () => {
+  const store = $('storeSel').value;
+  const qty = +$('qtyInput').value;
+  if (isNaN(qty) || qty < 0) { toast('数量を確認してください'); return; }
+
+  let p = current.product;
+  if (current.isNew) {
+    const no = $('regNo').value.trim(), nm = $('regName').value.trim();
+    if (!no || !nm) { toast('商品番号と商品名を入力してください'); return; }
+    p = { productNo: no, jan: current.jan || '', name: nm, category: '', price: '', boxQty: parseInt($('regBox').value, 10) || 0 };
+    await api('registerProduct', p);
+    S.products.push(p);
+  }
+
+  // 箱単位なら個数に換算して記録（在庫はすべて「個」で管理）
+  const bq = boxQtyForCurrent();
+  const isBox = unit === 'box' && bq > 0 && mode !== '棚卸';
+  const effQty = isBox ? qty * bq : qty;
+  const memoText = $('memoInput').value.trim();
+
+  const rec = {
+    type: mode, productNo: p.productNo, jan: p.jan, name: p.name,
+    qty: effQty, store: store,
+    toStore: mode === '譲渡' ? $('toStoreSel').value : '',
+    diff: null, staff: staffValue(),
+    memo: isBox ? (`${qty}箱×${bq}個` + (memoText ? '／' + memoText : '')) : memoText
+  };
+  if (mode === '棚卸') {
+    const theo = computeStock()[p.productNo + '|' + store] || 0;
+    rec.diff = qty - theo;
+  }
+  if (mode === '譲渡' && !rec.toStore) { toast('譲渡先を選択してください'); return; }
+
+  $('shSave').disabled = true;
+  try {
+    const r = await api('saveRecord', rec);
+    rec.row = r.row; rec.ts = r.ts; rec.cancelled = false;
+    S.logs.push(rec);
+    toast(mode === '棚卸'
+      ? `記録しました（差異 ${rec.diff > 0 ? '+' : ''}${rec.diff}）`
+      : `${mode}を記録しました：${p.name} × ${effQty}${isBox ? `（${qty}箱）` : ''}`);
+    closeSheet();
+    renderAll();
+  } catch (e) {
+    toast('保存エラー: ' + e.message);
+  } finally {
+    $('shSave').disabled = false;
+  }
+};
+
+// ================= 共通 =================
+function renderAll() {
+  renderProductList($('searchBox').value);
+  renderStock();
+  renderHistory();
+}
+let toastTimer;
+function toast(msg) {
+  $('toast').textContent = msg;
+  $('toast').classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2500);
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+</script>
+</body>
+</html>
