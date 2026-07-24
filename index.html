@@ -121,7 +121,7 @@
   <button id="photoBtn" class="big-btn">📸 写真を撮って読み取り</button>
   <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
   <button id="camBtn" class="big-btn" style="background:#777">📷 ライブカメラでスキャン</button>
-  <p class="hint">JAN（バーコード）・QRコードに対応。「📸 写真を撮って読み取り」はどの環境でも動きます（バーコード全体が大きく写るように撮影）。ライブカメラはGoogleの仕様変更によりGAS上では使えない場合があります。バーコードの無い商品は「商品検索」タブから。</p>
+  <p class="hint">JAN（バーコード）・QRコードに対応。<b>読み取りのコツ</b>：バーコードから15〜20cm離し、枠の中に横向きに収めて2〜3秒静止（近すぎるとピントが合いません）。読めないときは「📸 写真を撮って読み取り」へ。バーコードの無い商品は「商品検索」タブから。</p>
 </div>
 
 <div id="panel-search" class="panel">
@@ -374,7 +374,10 @@ $('photoInput').onchange = async () => {
   if (scanning) await stopScan();
   $('photoBtn').textContent = '⏳ 読み取り中…';
   $('photoBtn').disabled = true;
-  const fileScanner = new Html5Qrcode('reader', { formatsToSupport: SCAN_FORMATS_() });
+  const fileScanner = new Html5Qrcode('reader', {
+    formatsToSupport: SCAN_FORMATS_(),
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+  });
   try {
     const text = await fileScanner.scanFile(f, false);
     onScan(text);
@@ -391,10 +394,19 @@ $('photoInput').onchange = async () => {
 $('camBtn').onclick = async () => {
   if (scanning) { await stopScan(); return; }
   try {
-    scanner = new Html5Qrcode('reader', { formatsToSupport: SCAN_FORMATS_() });
+    scanner = new Html5Qrcode('reader', {
+      formatsToSupport: SCAN_FORMATS_(),
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true } // 対応端末ではブラウザ内蔵の高速検出を使う
+    });
     await scanner.start(
       { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 260, height: 140 } },
+      {
+        fps: 15,
+        // バーコードは横長なので、スキャン枠を広めに取る
+        qrbox: (vw, vh) => ({ width: Math.floor(vw * 0.9), height: Math.max(120, Math.floor(vh * 0.45)) }),
+        // 高解像度を要求（1次元バーコードの読み取りに必要）
+        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+      },
       onScan
     );
     scanning = true;
