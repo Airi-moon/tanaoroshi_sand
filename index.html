@@ -188,10 +188,21 @@
     <select id="toStoreSel"></select>
   </div>
   <div class="field" id="regFields" style="display:none">
-    <label>未登録の商品です。マスタに登録します：</label>
-    <input id="regNo" placeholder="商品番号（例: S010）" style="margin-bottom:6px">
-    <input id="regName" placeholder="商品名" style="margin-bottom:6px">
-    <input id="regBox" type="number" inputmode="numeric" min="0" placeholder="1箱あたりの個数（箱で入荷する商品のみ・任意）">
+    <label>マスタに無いバーコードです。どうしますか？</label>
+    <div class="unit-row" style="margin-bottom:8px">
+      <button type="button" id="regModeBind" class="active">既存の商品に紐づける</button>
+      <button type="button" id="regModeNew">新規登録</button>
+    </div>
+    <div id="regBindArea">
+      <input id="bindSearch" placeholder="商品名・メーカーで検索" autocomplete="off">
+      <div id="bindList" style="max-height:180px;overflow-y:auto;margin-top:6px"></div>
+      <div id="bindChosen" class="theo" style="display:none"></div>
+    </div>
+    <div id="regNewArea" style="display:none">
+      <input id="regNo" placeholder="商品番号（例: S010）" style="margin-bottom:6px">
+      <input id="regName" placeholder="商品名" style="margin-bottom:6px">
+      <input id="regBox" type="number" inputmode="numeric" min="0" placeholder="1箱あたりの個数（箱で入荷する商品のみ・任意）">
+    </div>
   </div>
   <div class="field">
     <label>メモ（任意）</label>
@@ -271,6 +282,14 @@ const demo = {
   registerProduct(p) {
     const d = this.load();
     d.products.push(p);
+    this.save(d);
+    return true;
+  },
+  attachJan(req) {
+    const d = this.load();
+    const p = d.products.find(x => x.productNo === req.productNo);
+    if (!p) return false;
+    p.jan = req.jan;
     this.save(d);
     return true;
   }
@@ -611,10 +630,50 @@ function renderPicker() {
   });
 }
 
+// ================= 未登録バーコード：既存商品への紐づけ =================
+let regMode = 'bind';   // 'bind'（既存に紐づけ）| 'new'（新規登録）
+let bindTarget = null;  // 紐づけ先に選んだ商品
+
+function setRegMode(m) {
+  regMode = m;
+  $('regModeBind').classList.toggle('active', m === 'bind');
+  $('regModeNew').classList.toggle('active', m === 'new');
+  $('regBindArea').style.display = m === 'bind' ? 'block' : 'none';
+  $('regNewArea').style.display = m === 'new' ? 'block' : 'none';
+  refreshUnitField();
+}
+$('regModeBind').onclick = () => setRegMode('bind');
+$('regModeNew').onclick = () => setRegMode('new');
+
+$('bindSearch').oninput = () => renderBindList($('bindSearch').value);
+
+function renderBindList(q) {
+  q = (q || '').trim().toLowerCase();
+  // JAN未登録の商品を優先して表示（紐づけ候補として一番ありえるため）
+  const list = S.products
+    .filter(p => !q || p.name.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q) || p.productNo.toLowerCase().includes(q))
+    .sort((a, b) => (String(a.jan).trim() ? 1 : 0) - (String(b.jan).trim() ? 1 : 0))
+    .slice(0, 30);
+  $('bindList').innerHTML = list.map(p => `
+    <div class="pitem" data-no="${esc(p.productNo)}" style="padding:8px 10px;margin-bottom:6px">
+      <div><div class="nm" style="font-size:13px">${esc(p.name)}</div>
+      <div class="sub">${esc(p.category || '')}${String(p.jan).trim() ? '｜JAN登録済' : ''}</div></div>
+    </div>`).join('') || '<p class="hint">該当する商品がありません</p>';
+  $('bindList').querySelectorAll('.pitem').forEach(el => el.onclick = () => {
+    bindTarget = S.products.find(p => p.productNo === el.dataset.no);
+    $('bindChosen').style.display = 'block';
+    $('bindChosen').textContent = `✔ 「${bindTarget.name}」にこのバーコードを紐づけます`;
+    refreshUnitField();
+  });
+}
+
 // ================= 単位（個/箱）切り替え =================
 function boxQtyForCurrent() {
   if (!current) return 0;
-  if (current.isNew) return parseInt($('regBox').value, 10) || 0;
+  if (current.isNew) {
+    if (regMode === 'bind') return (bindTarget && +bindTarget.boxQty) || 0;
+    return parseInt($('regBox').value, 10) || 0;
+  }
   return (current.product && +current.product.boxQty) || 0;
 }
 
@@ -645,10 +704,15 @@ function openSheet(product, scannedCode) {
     $('shCode').textContent = product.productNo + (product.jan ? ' / JAN:' + product.jan : '');
     $('regFields').style.display = 'none';
   } else {
-    $('shName').textContent = '未登録の商品';
+    $('shName').textContent = 'マスタに無いバーコード';
     $('shCode').textContent = 'スキャンしたコード: ' + scannedCode;
     $('regFields').style.display = 'block';
     $('regNo').value = ''; $('regName').value = ''; $('regBox').value = '';
+    bindTarget = null;
+    $('bindChosen').style.display = 'none';
+    $('bindSearch').value = '';
+    renderBindList('');
+    setRegMode('bind');
   }
 
   $('toStoreField').style.display = mode === '譲渡' ? 'block' : 'none';
@@ -697,11 +761,21 @@ $('shSave').onclick = async () => {
 
   let p = current.product;
   if (current.isNew) {
-    const no = $('regNo').value.trim(), nm = $('regName').value.trim();
-    if (!no || !nm) { toast('商品番号と商品名を入力してください'); return; }
-    p = { productNo: no, jan: current.jan || '', name: nm, category: '', price: '', boxQty: parseInt($('regBox').value, 10) || 0 };
-    await api('registerProduct', p);
-    S.products.push(p);
+    if (regMode === 'bind') {
+      // 既存商品にスキャンしたJANを紐づける
+      if (!bindTarget) { toast('紐づける商品をリストから選択してください'); return; }
+      if (!current.jan) { toast('紐づけるバーコードがありません'); return; }
+      const ok = await api('attachJan', { productNo: bindTarget.productNo, jan: current.jan });
+      if (!ok) { toast('紐づけに失敗しました（マスタに商品が見つかりません）'); return; }
+      bindTarget.jan = current.jan; // 次回からスキャン一発で照合される
+      p = bindTarget;
+    } else {
+      const no = $('regNo').value.trim(), nm = $('regName').value.trim();
+      if (!no || !nm) { toast('商品番号と商品名を入力してください'); return; }
+      p = { productNo: no, jan: current.jan || '', name: nm, category: '', price: '', boxQty: parseInt($('regBox').value, 10) || 0 };
+      await api('registerProduct', p);
+      S.products.push(p);
+    }
   }
 
   // 箱単位なら個数に換算して記録（在庫はすべて「個」で管理）
