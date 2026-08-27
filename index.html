@@ -118,6 +118,28 @@
   .citem.ex { border-color: #ddd; background: #f4f4f4; opacity: .8; }
   .citem.ex .st { color: #999; }
 
+  /* 貸し借り（返却チェック） */
+  .tabs button .tbadge { display: inline-block; min-width: 17px; padding: 0 4px; margin-left: 3px; border-radius: 9px; background: #e5534b; color: #fff; font-size: 10px; line-height: 17px; font-weight: 700; vertical-align: 1px; }
+  .litem { background: #fff; border: 1px solid var(--border); border-left: 4px solid #ccc; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  .litem.open { border-left-color: #e5534b; }
+  .litem.half { border-left-color: #d4a017; }
+  .litem.done { border-left-color: #1a7f37; background: #f4fbf6; }
+  .litem.overdue { background: #fff5f5; }
+  .litem .ltop { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .lbadge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; color: #fff; white-space: nowrap; }
+  .lbadge.out { background: var(--transfer); }
+  .lbadge.in { background: var(--biz); }
+  .litem .lmeta { color: #888; font-size: 11px; margin-top: 4px; }
+  .litem .lover { display: inline-block; font-size: 10px; font-weight: 700; color: #fff; background: #e5534b; border-radius: 8px; padding: 1px 7px; }
+  .lchk-row { display: flex; gap: 8px; align-items: stretch; margin-top: 9px; }
+  .lchk { flex: 1; padding: 11px 6px; font-size: 14px; font-weight: 700; border: 2px solid var(--border); border-radius: 10px; background: #fff; color: #666; }
+  .lchk.on { border-color: var(--arrival); color: var(--arrival); background: #e8f5ec; }
+  .lchk:disabled { opacity: .5; }
+  .lother { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 12px; border: 1px dashed var(--border); border-radius: 10px; padding: 6px; color: #999; line-height: 1.35; }
+  .lother.on { border-style: solid; border-color: #b7dfc3; color: #1a7f37; background: #f4fbf6; }
+  .litem .lnote { font-size: 11px; color: #1a7f37; margin-top: 7px; }
+  #loanSummary .cnt { font-size: 14px; font-weight: 700; color: #333; }
+
   /* モードインジケータ（いま何として記録されるか） */
   .modeIndicator { font-size: 12px; font-weight: 700; padding: 8px 12px; border-radius: 8px; margin-bottom: 10px; }
   .mi-入荷 { background: #e8f5ec; color: var(--arrival); }
@@ -150,6 +172,7 @@
 
 <div class="tabs">
   <button data-tab="scan" class="active">スキャン</button>
+  <button data-tab="loan">貸し借り</button>
   <button data-tab="search">商品検索</button>
   <button data-tab="check">棚卸表</button>
   <button data-tab="stock">在庫</button>
@@ -175,6 +198,16 @@
   <div class="modeIndicator"></div>
   <input id="searchBox" placeholder="商品番号・商品名・JANで検索" autocomplete="off">
   <div id="productList" class="plist"></div>
+</div>
+
+<div id="panel-loan" class="panel">
+  <div id="loanSummary"></div>
+  <div class="unit-row" style="margin:10px 0 8px">
+    <button type="button" id="loanFilterOpen" class="active">未完了</button>
+    <button type="button" id="loanFilterAll">すべて</button>
+  </div>
+  <div id="loanList"></div>
+  <p class="hint">借りたものは<b>その月のうちに返却</b>するルールです。返したら「返した」、返してもらったら「返してもらった」をタップしてください。<b>両方そろって返却完了</b>になり、<b>在庫は自動で貸出元に戻ります</b>（差し引きゼロ）。片方だけ・どちらも未チェックのままだと在庫は移動したままになり、Slackに通知が飛びます。</p>
 </div>
 
 <div id="panel-check" class="panel">
@@ -328,8 +361,10 @@ const demo = {
     const d = this.load();
     const l = d.logs.find(x => x.row === row);
     if (l) l.cancelled = true;
+    const back = d.logs.find(x => Number(x.retOrigin) === Number(row));
+    if (back) back.cancelled = true;
     this.save(d);
-    return true;
+    return { ok: true, cancelledBackRow: back ? back.row : null };
   },
   registerProduct(p) {
     const d = this.load();
@@ -344,6 +379,36 @@ const demo = {
     p.jan = req.jan;
     this.save(d);
     return true;
+  },
+  markReturn(req) {
+    const d = this.load();
+    const l = d.logs.find(x => x.row === req.row);
+    if (!l) return { error: '対象の記録が見つかりません' };
+    const done = x => !!(String(x.retLender || '').trim() && String(x.retBorrower || '').trim());
+    const wasComplete = done(l);
+    const stamp = req.checked
+      ? new Date().toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' ' + (req.staff || '担当者不明')
+      : '';
+    if (req.side === 'lender') l.retLender = stamp; else l.retBorrower = stamp;
+    let returnBack = null, cancelledBackRow = null;
+    const back = d.logs.find(x => Number(x.retOrigin) === Number(l.row));
+    if (!wasComplete && done(l)) {
+      if (back) { back.cancelled = false; returnBack = back; }
+      else {
+        returnBack = {
+          row: d.logs.length + 2, ts: stamp.slice(0, 16), type: '譲渡', productNo: l.productNo, jan: l.jan,
+          name: l.name, qty: l.qty, store: l.toStore, toStore: l.store, diff: null, staff: req.staff || '',
+          memo: '↩︎ 返却（' + l.row + '行目の戻し）', cancelled: false,
+          retLender: '自動', retBorrower: '自動', retStatus: '返却戻し', retOrigin: l.row
+        };
+        d.logs.push(returnBack);
+      }
+    } else if (wasComplete && !done(l) && back) {
+      back.cancelled = true;
+      cancelledBackRow = back.row;
+    }
+    this.save(d);
+    return { row: l.row, retLender: l.retLender || '', retBorrower: l.retBorrower || '', returnBack, cancelledBackRow };
   }
 };
 
@@ -460,12 +525,22 @@ function setMode(m) {
   updateModeIndicator();
 }
 
-// モードが最上位ナビ：入荷/業務転用/譲渡=スキャン画面のみ（タブ非表示）、棚卸=全タブ表示
+// モードが最上位ナビ：入荷/業務転用=スキャン画面のみ（タブ非表示）、譲渡/棚卸=そのモードで使うタブだけ表示
+const MODE_TABS = {
+  '入荷': [],
+  '業務転用': [],
+  '譲渡': ['scan', 'loan', 'search', 'history'],
+  '棚卸': ['scan', 'search', 'check', 'stock', 'history']
+};
+
 function applyModeLayout() {
-  const isTana = (mode === '棚卸');
-  document.querySelector('.tabs').style.display = isTana ? 'flex' : 'none';
-  $('quickLinks').style.display = isTana ? 'none' : 'flex';
-  document.querySelectorAll('.backToScan').forEach(el => el.style.display = isTana ? 'none' : 'block');
+  const tabs = MODE_TABS[mode] || [];
+  document.querySelector('.tabs').style.display = tabs.length ? 'flex' : 'none';
+  document.querySelectorAll('.tabs button').forEach(b => {
+    b.style.display = tabs.includes(b.dataset.tab) ? '' : 'none';
+  });
+  $('quickLinks').style.display = tabs.length ? 'none' : 'flex';
+  document.querySelectorAll('.backToScan').forEach(el => el.style.display = tabs.length ? 'none' : 'block');
 }
 
 function selectTab(name) {
@@ -476,6 +551,7 @@ function selectTab(name) {
   if (name === 'history') renderHistory();
   if (name === 'search') renderProductList($('searchBox').value);
   if (name === 'check') renderCheck();
+  if (name === 'loan') renderLoan();
   updateModeIndicator();
 }
 
@@ -649,17 +725,21 @@ function renderHistory() {
   $('historyList').innerHTML = items.map(l => `
     <div class="hitem${l.cancelled ? ' cancelled' : ''}">
       <div class="top">
-        <span><span class="badge ${l.type}">${l.type}</span> <b>${esc(l.name)}</b> × ${l.qty}</span>
-        ${l.cancelled ? '' : `<button class="cxl" data-row="${l.row}">取消</button>`}
+        <span><span class="badge ${l.type}">${isReturnBack(l) ? '↩︎ 返却' : l.type}</span> <b>${esc(l.name)}</b> × ${l.qty}</span>
+        ${l.cancelled || isReturnBack(l) ? '' : `<button class="cxl" data-row="${l.row}">取消</button>`}
       </div>
       <div class="meta">${esc(l.ts)}｜${esc(l.store)}${l.toStore ? ' → ' + esc(l.toStore) : ''}${l.diff !== null && l.diff !== undefined && l.type === '棚卸' ? '｜差異 ' + (l.diff > 0 ? '+' : '') + l.diff : ''}${l.staff ? '｜' + esc(l.staff) : ''}</div>
     </div>`).join('') || '<p class="hint">まだ記録がありません</p>';
   document.querySelectorAll('.cxl').forEach(b => b.onclick = async () => {
     if (!confirm('この記録を取り消しますか？')) return;
-    await api('cancelRecord', +b.dataset.row);
+    const r = await api('cancelRecord', +b.dataset.row);
     const l = S.logs.find(x => x.row === +b.dataset.row);
     if (l) l.cancelled = true;
-    renderHistory(); toast('取り消しました');
+    if (r && r.cancelledBackRow) {
+      const bl = S.logs.find(x => x.row === r.cancelledBackRow);
+      if (bl) bl.cancelled = true;
+    }
+    renderAll(); toast('取り消しました');
   });
 }
 
@@ -717,6 +797,110 @@ function renderPicker() {
   }).join('') + '</div>';
   document.querySelectorAll('.prod-card').forEach(el => el.onclick = () => {
     openSheet(S.products[+el.dataset.i], ''); // 個数入力→保存はスキャン時と同じ確認シート
+  });
+}
+
+// ================= 貸し借り（店舗間移動の返却チェック） =================
+// ルール：借りたものはその月のうちに返す。
+// 貸した側「返してもらった」と借りた側「返した」の両方がそろって初めて返却完了。
+let loanFilter = 'open'; // 'open'=未完了のみ | 'all'
+
+function isReturnBack(l) { return String(l.retStatus || '') === '返却戻し'; }
+function loanItemsFor(store) {
+  // 「返却戻し」は返却完了時に自動作成される在庫戻しの記録なので、貸し借り一覧には出さない
+  return S.logs.filter(l => !l.cancelled && l.type === '譲渡' && !isReturnBack(l) && (l.store === store || l.toStore === store));
+}
+function retLenderOf(l) { return String(l.retLender || '').trim(); }
+function retBorrowerOf(l) { return String(l.retBorrower || '').trim(); }
+function loanDone(l) { return !!(retLenderOf(l) && retBorrowerOf(l)); }
+function loanOverdue(l) { return !loanDone(l) && ymOf_(l.ts) < currentYM_(); } // 先月以前＝月内返却ルール超過
+
+function setLoanFilter(f) {
+  loanFilter = f;
+  $('loanFilterOpen').classList.toggle('active', f === 'open');
+  $('loanFilterAll').classList.toggle('active', f === 'all');
+  renderLoan();
+}
+$('loanFilterOpen').onclick = () => setLoanFilter('open');
+$('loanFilterAll').onclick = () => setLoanFilter('all');
+
+// タブに未完了件数のバッジを出す
+function updateLoanBadge() {
+  const btn = document.querySelector('.tabs button[data-tab="loan"]');
+  if (!btn) return;
+  const n = loanItemsFor($('storeSel').value).filter(l => !loanDone(l)).length;
+  btn.innerHTML = '貸し借り' + (n ? ` <span class="tbadge">${n}</span>` : '');
+}
+
+function renderLoan() {
+  const store = $('storeSel').value;
+  const all = loanItemsFor(store).slice().sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+  const open = all.filter(l => !loanDone(l));
+  const overdueCount = all.filter(loanOverdue).length;
+  // 未完了は古い順（返し忘れが上に来る）、すべて表示のときは新しい順
+  const list = loanFilter === 'open' ? open : all.slice().reverse();
+
+  $('loanSummary').innerHTML =
+    `<span class="cnt">${esc(store)}：未完了 ${open.length} 件</span>` +
+    (overdueCount ? `<div style="font-size:12px;color:#d33;font-weight:700;margin-top:3px">⚠️ うち ${overdueCount} 件は先月以前の貸し借りです（今月中に返却・チェックを）</div>` : '');
+
+  $('loanList').innerHTML = list.map(l => {
+    const isLender = l.store === store;                       // 自店舗が貸した側か
+    const mySide = isLender ? 'lender' : 'borrower';
+    const myVal = isLender ? retLenderOf(l) : retBorrowerOf(l);
+    const otherVal = isLender ? retBorrowerOf(l) : retLenderOf(l);
+    const partner = isLender ? l.toStore : l.store;
+    const myLabel = isLender ? '返してもらった' : '返した';
+    const otherLabel = isLender ? '相手の「返した」' : '相手の「返してもらった」';
+    const cls = loanDone(l) ? 'done' : (myVal || otherVal ? 'half' : 'open');
+    return `
+    <div class="litem ${cls}${loanOverdue(l) ? ' overdue' : ''}">
+      <div class="ltop">
+        <span class="lbadge ${isLender ? 'out' : 'in'}">${isLender ? '貸出' : '借用'}</span>
+        <span>${esc(l.name)} × ${l.qty}</span>
+        ${loanOverdue(l) ? '<span class="lover">期限超過</span>' : ''}
+      </div>
+      <div class="lmeta">${isLender ? '→ ' : '← '}${esc(partner || '(不明)')}｜貸借日 ${esc(String(l.ts).slice(0, 10))}${l.staff ? '｜記録 ' + esc(l.staff) : ''}</div>
+      <div class="lchk-row">
+        <button class="lchk${myVal ? ' on' : ''}" data-row="${l.row}" data-side="${mySide}">${myVal ? '✅' : '⬜️'} ${myLabel}</button>
+        <div class="lother${otherVal ? ' on' : ''}">${otherVal ? '✔ ' + otherLabel + '<br>済' : '― ' + otherLabel + '<br>未チェック'}</div>
+      </div>
+      ${loanDone(l) ? `<div class="lnote">📦 在庫は ${esc(isLender ? store : l.store)} に戻してあります（差し引きゼロ）</div>` : ''}
+    </div>`;
+  }).join('') || `<p class="hint">${loanFilter === 'open' ? '🎉 未完了の貸し借りはありません' : 'この店舗の店舗間移動の記録はまだありません'}</p>`;
+
+  $('loanList').querySelectorAll('.lchk').forEach(btn => btn.onclick = async () => {
+    const row = +btn.dataset.row;
+    const side = btn.dataset.side;
+    const l = S.logs.find(x => x.row === row);
+    if (!l) return;
+    const cur = side === 'lender' ? retLenderOf(l) : retBorrowerOf(l);
+    const checked = !cur;
+    if (!checked && !confirm('このチェックを外しますか？')) return;
+    const staff = staffValue();
+    if (checked && !staff) { toast('先に担当者を選択してください'); return; }
+    btn.disabled = true;
+    try {
+      const r = await api('markReturn', { row, side, checked, staff, store: $('storeSel').value });
+      if (r && r.error) { toast(r.error); btn.disabled = false; return; }
+      l.retLender = r.retLender || '';
+      l.retBorrower = r.retBorrower || '';
+      // 在庫の戻し記録を画面側のログにも反映（在庫表示・棚卸の理論在庫をその場で合わせる）
+      if (r.returnBack) {
+        const ex = S.logs.find(x => x.row === r.returnBack.row);
+        if (ex) Object.assign(ex, r.returnBack); else S.logs.push(r.returnBack);
+      }
+      if (r.cancelledBackRow) {
+        const bl = S.logs.find(x => x.row === r.cancelledBackRow);
+        if (bl) bl.cancelled = true;
+      }
+      toast(loanDone(l) ? '返却完了：在庫を貸出元に戻しました' : (checked ? 'チェックしました（相手の確認待ち）' : 'チェックを外しました'));
+      renderAll();
+      selectTab('loan');
+    } catch (e) {
+      toast('保存エラー: ' + e.message);
+      btn.disabled = false;
+    }
   });
 }
 
@@ -1052,7 +1236,9 @@ function renderAll() {
   renderProductList($('searchBox').value);
   renderStock();
   renderHistory();
+  updateLoanBadge();
   if ($('panel-check').classList.contains('active')) renderCheck();
+  if ($('panel-loan').classList.contains('active')) renderLoan();
 }
 let toastTimer;
 function toast(msg) {
