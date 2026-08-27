@@ -99,6 +99,20 @@
   .prod-card .ph { height: 110px; display: flex; align-items: center; justify-content: center; font-size: 44px; }
   .prod-card .nm2 { font-size: 12px; font-weight: 600; padding: 6px 8px 2px; line-height: 1.35; }
   .prod-card .pr { font-size: 11px; color: #999; padding-bottom: 10px; }
+
+  /* 棚卸チェックリスト */
+  .pbar { height: 10px; background: #e5e5e5; border-radius: 5px; overflow: hidden; margin-top: 6px; }
+  .pfill { height: 100%; background: #1a7f37; border-radius: 5px; transition: width .3s; }
+  #checkProgress .cnt { font-size: 14px; font-weight: 700; color: #333; }
+  .citem { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; margin-bottom: 7px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .citem.miss { border-color: #e5534b; background: #fff5f5; }
+  .citem.done { border-color: #b7dfc3; background: #f4fbf6; }
+  .citem .nm { font-size: 13px; font-weight: 600; }
+  .citem .sub { font-size: 11px; color: #999; margin-top: 2px; }
+  .citem .st { font-size: 13px; font-weight: 700; white-space: nowrap; }
+  .citem.miss .st { color: #d33; }
+  .citem.done .st { color: #1a7f37; }
+  .citem .zeroBtn { border: 1.5px solid #d33; color: #d33; background: #fff; border-radius: 8px; padding: 8px 14px; font-size: 14px; font-weight: 700; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -126,6 +140,7 @@
 <div class="tabs">
   <button data-tab="scan" class="active">スキャン</button>
   <button data-tab="search">商品検索</button>
+  <button data-tab="check">棚卸表</button>
   <button data-tab="stock">在庫</button>
   <button data-tab="history">履歴</button>
 </div>
@@ -142,6 +157,17 @@
 <div id="panel-search" class="panel">
   <input id="searchBox" placeholder="商品番号・商品名・JANで検索" autocomplete="off">
   <div id="productList" class="plist"></div>
+</div>
+
+<div id="panel-check" class="panel">
+  <div id="checkProgress"></div>
+  <div class="unit-row" style="margin:10px 0 8px">
+    <button type="button" id="chkFilterMiss" class="active">未カウントのみ</button>
+    <button type="button" id="chkFilterAll">すべて</button>
+  </div>
+  <input id="checkSearch" placeholder="商品名・カテゴリで絞り込み" autocomplete="off" style="width:100%;padding:10px;font-size:15px;border:1px solid var(--border);border-radius:10px">
+  <div id="checkList" style="margin-top:10px"></div>
+  <p class="hint">今月まだ棚卸していない商品が赤く表示されます。商品が無い棚は「0」ボタンで即記録。行をタップすると数量を入力できます（自動で棚卸モードになります）。</p>
 </div>
 
 <div id="panel-stock" class="panel">
@@ -401,7 +427,13 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   if (b.dataset.tab === 'stock') renderStock();
   if (b.dataset.tab === 'history') renderHistory();
   if (b.dataset.tab === 'search') renderProductList($('searchBox').value);
+  if (b.dataset.tab === 'check') renderCheck();
 });
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.modes button').forEach(x => x.classList.toggle('active', x.dataset.mode === m));
+}
 
 // ================= 写真を撮って読み取り（どの環境でも動く） =================
 const SCAN_FORMATS_ = () => [
@@ -630,6 +662,102 @@ function renderPicker() {
   });
 }
 
+// ================= 棚卸しチェックリスト（数え漏れ防止） =================
+let checkFilter = 'miss'; // 'miss'=未カウントのみ | 'all'
+
+function ymOf_(ts) { return String(ts || '').slice(0, 7).replace('/', '-'); }
+function currentYM_() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+
+// 店舗ごとの棚卸状況マップ: productNo → {cur:今月の棚卸記録, prev:前回(今月より前)の棚卸記録}
+function stocktakeMap(store) {
+  const m = {};
+  const ym = currentYM_();
+  for (const l of S.logs) {
+    if (l.cancelled || l.type !== '棚卸' || l.store !== store) continue;
+    const e = m[l.productNo] || (m[l.productNo] = { cur: null, prev: null });
+    if (ymOf_(l.ts) === ym) e.cur = l;   // ログは時系列順なので最後の記録が残る
+    else e.prev = l;
+  }
+  return m;
+}
+
+// 前回(今月より前)の棚卸個数。記録がなければnull
+function prevStocktakeQty(productNo, store) {
+  const e = stocktakeMap(store)[productNo];
+  return e && e.prev ? e.prev.qty : null;
+}
+
+$('chkFilterMiss').onclick = () => { checkFilter = 'miss'; $('chkFilterMiss').classList.add('active'); $('chkFilterAll').classList.remove('active'); renderCheck(); };
+$('chkFilterAll').onclick = () => { checkFilter = 'all'; $('chkFilterAll').classList.add('active'); $('chkFilterMiss').classList.remove('active'); renderCheck(); };
+$('checkSearch').oninput = () => renderCheck();
+
+function renderCheck() {
+  const store = $('storeSel').value;
+  const q = ($('checkSearch').value || '').trim().toLowerCase();
+  const m = stocktakeMap(store);
+  let done = 0;
+  const total = S.products.length;
+  const rows = [];
+  const LIMIT = 400;
+  let hidden = 0;
+  for (const p of S.products) {
+    const e = m[p.productNo];
+    const counted = !!(e && e.cur);
+    if (counted) done++;
+    if (checkFilter === 'miss' && counted) continue;
+    if (q && !(p.name.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q) || p.productNo.toLowerCase().includes(q))) continue;
+    if (rows.length >= LIMIT) { hidden++; continue; }
+    const prev = e && e.prev ? e.prev.qty : null;
+    const sub = `${esc(p.category || '')}${prev !== null ? '｜前回 ' + prev + '個' : ''}`;
+    rows.push(counted
+      ? `<div class="citem done" data-no="${esc(p.productNo)}">
+           <div><div class="nm">${esc(p.name)}</div><div class="sub">${sub}</div></div>
+           <div class="st">✔ ${e.cur.qty}個</div>
+         </div>`
+      : `<div class="citem miss" data-no="${esc(p.productNo)}">
+           <div><div class="nm">${esc(p.name)}</div><div class="sub">${sub}</div></div>
+           <div style="display:flex;align-items:center;gap:8px"><span class="st">未</span>
+           <button class="zeroBtn" data-no="${esc(p.productNo)}">0</button></div>
+         </div>`);
+  }
+  const pct = total ? Math.round(done / total * 100) : 0;
+  $('checkProgress').innerHTML =
+    `<span class="cnt">${esc(store)}：済 ${done} / ${total}（${pct}%）</span>
+     <div class="pbar"><div class="pfill" style="width:${pct}%"></div></div>`;
+  $('checkList').innerHTML = rows.join('') ||
+    '<p class="hint">🎉 この店舗の棚卸はすべて完了しています！</p>';
+  if (hidden) $('checkList').innerHTML += `<p class="hint">ほか ${hidden} 件（検索で絞り込んでください）</p>`;
+
+  // 行タップ → 棚卸モードで数量入力
+  $('checkList').querySelectorAll('.citem').forEach(el => el.onclick = () => {
+    const p = S.products.find(x => x.productNo === el.dataset.no);
+    if (!p) return;
+    setMode('棚卸');
+    openSheet(p, '');
+  });
+  // 0ボタン → その場で棚卸0を記録（在庫が無い棚用）
+  $('checkList').querySelectorAll('.zeroBtn').forEach(btn => btn.onclick = async (ev) => {
+    ev.stopPropagation();
+    const p = S.products.find(x => x.productNo === btn.dataset.no);
+    if (!p) return;
+    const prev = prevStocktakeQty(p.productNo, store);
+    if (prev > 0 && !confirm(`⚠️ 前回の棚卸では「${p.name}」は ${prev} 個ありました。\n本当に 0 個ですか？（数え忘れではないですか？）`)) return;
+    btn.disabled = true;
+    const theo = computeStock()[p.productNo + '|' + store] || 0;
+    const rec = { type: '棚卸', productNo: p.productNo, jan: p.jan, name: p.name, qty: 0, store: store, toStore: '', diff: 0 - theo, staff: staffValue(), memo: '' };
+    try {
+      const r = await api('saveRecord', rec);
+      rec.row = r.row; rec.ts = r.ts; rec.cancelled = false;
+      S.logs.push(rec);
+      toast(`${p.name}：0個で記録しました`);
+      renderCheck();
+    } catch (e) {
+      toast('保存エラー: ' + e.message);
+      btn.disabled = false;
+    }
+  });
+}
+
 // ================= 未登録バーコード：既存商品への紐づけ =================
 let regMode = 'bind';   // 'bind'（既存に紐づけ）| 'new'（新規登録）
 let bindTarget = null;  // 紐づけ先に選んだ商品
@@ -794,6 +922,11 @@ $('shSave').onclick = async () => {
   if (mode === '棚卸') {
     const theo = computeStock()[p.productNo + '|' + store] || 0;
     rec.diff = qty - theo;
+    // 数え忘れアラート：前回は在庫があったのに今回0
+    if (qty === 0) {
+      const prev = prevStocktakeQty(p.productNo, store);
+      if (prev > 0 && !confirm(`⚠️ 前回の棚卸では「${p.name}」は ${prev} 個ありました。\n本当に 0 個ですか？（数え忘れではないですか？）`)) return;
+    }
   }
   if (mode === '譲渡' && !rec.toStore) { toast('譲渡先を選択してください'); return; }
 
@@ -819,6 +952,7 @@ function renderAll() {
   renderProductList($('searchBox').value);
   renderStock();
   renderHistory();
+  if ($('panel-check').classList.contains('active')) renderCheck();
 }
 let toastTimer;
 function toast(msg) {
