@@ -18,7 +18,9 @@
   header { background: var(--accent-bg); border-bottom: 2px solid var(--accent); padding: 10px 12px; position: sticky; top: 0; z-index: 10; }
   header h1 { font-size: 16px; color: #6b4e00; display: flex; align-items: center; gap: 6px; }
   .head-row { display: flex; gap: 8px; margin-top: 8px; }
-  .head-row select, .head-row input { flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; background: #fff; }
+  .head-row select, .head-row input { flex: 1; min-width: 0; padding: 8px 6px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; background: #fff; }
+  #storeSel { flex: 2; }   /* 店舗:担当者 = 2:1 */
+  #staffSel { flex: 1; }
 
   #demoBanner { display: none; background: #fff3cd; color: #7a5b00; font-size: 12px; text-align: center; padding: 4px; }
 
@@ -115,6 +117,13 @@
   .citem .zeroBtn { border: 1.5px solid #d33; color: #d33; background: #fff; border-radius: 8px; padding: 8px 14px; font-size: 14px; font-weight: 700; white-space: nowrap; }
   .citem.ex { border-color: #ddd; background: #f4f4f4; opacity: .8; }
   .citem.ex .st { color: #999; }
+
+  /* モードインジケータ（いま何として記録されるか） */
+  .modeIndicator { font-size: 12px; font-weight: 700; padding: 8px 12px; border-radius: 8px; margin-bottom: 10px; }
+  .mi-入荷 { background: #e8f5ec; color: var(--arrival); }
+  .mi-業務転用 { background: #e7f0fb; color: var(--biz); }
+  .mi-譲渡 { background: #fdf3d7; color: var(--transfer); }
+  .mi-棚卸 { background: #f1eafd; color: var(--stocktake); }
 </style>
 </head>
 <body>
@@ -132,7 +141,7 @@
   </div>
 </header>
 
-<div class="modes">
+<div class="modes" id="modeRow">
   <button data-mode="入荷" class="active">📥 入荷</button>
   <button data-mode="業務転用">🧴 業務転用</button>
   <button data-mode="譲渡">🔁 譲渡</button>
@@ -148,6 +157,7 @@
 </div>
 
 <div id="panel-scan" class="panel active">
+  <div class="modeIndicator"></div>
   <div id="reader"></div>
   <button id="photoBtn" class="big-btn">📸 写真を撮って読み取り</button>
   <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
@@ -157,12 +167,14 @@
 </div>
 
 <div id="panel-search" class="panel">
+  <div class="modeIndicator"></div>
   <input id="searchBox" placeholder="商品番号・商品名・JANで検索" autocomplete="off">
   <div id="productList" class="plist"></div>
 </div>
 
 <div id="panel-check" class="panel">
   <div id="checkProgress"></div>
+  <button id="checkScanBtn" class="big-btn" style="background:var(--stocktake);margin-top:8px">📷 バーコードをスキャンして数える</button>
   <div class="unit-row" style="margin:10px 0 8px">
     <button type="button" id="chkFilterMiss" class="active">未カウント</button>
     <button type="button" id="chkFilterAll">すべて</button>
@@ -417,26 +429,47 @@ function staffValue() {
 }
 
 // ================= モード / タブ =================
-document.querySelectorAll('.modes button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('.modes button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  mode = b.dataset.mode;
-});
-document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  $('panel-' + b.dataset.tab).classList.add('active');
-  if (b.dataset.tab === 'stock') renderStock();
-  if (b.dataset.tab === 'history') renderHistory();
-  if (b.dataset.tab === 'search') renderProductList($('searchBox').value);
-  if (b.dataset.tab === 'check') renderCheck();
-});
+const MODE_DESC = {
+  '入荷': '📥 入荷モード：スキャンした商品を「店舗への入荷」として記録します',
+  '業務転用': '🧴 業務転用モード：店舗販売用→業務用への切り替えとして記録します',
+  '譲渡': '🔁 譲渡モード：他店舗への譲渡として記録します（保存時に譲渡先を選択）',
+  '棚卸': '📋 棚卸モード：数えた実数を棚卸として記録します'
+};
+
+function updateModeIndicator() {
+  document.querySelectorAll('.modeIndicator').forEach(el => {
+    el.textContent = MODE_DESC[mode];
+    el.className = 'modeIndicator mi-' + mode;
+  });
+}
 
 function setMode(m) {
   mode = m;
   document.querySelectorAll('.modes button').forEach(x => x.classList.toggle('active', x.dataset.mode === m));
+  updateModeIndicator();
 }
+
+function selectTab(name) {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+  $('panel-' + name).classList.add('active');
+  // モードボタンは「記録する画面」（スキャン・商品検索）のときだけ表示
+  $('modeRow').style.display = (name === 'scan' || name === 'search') ? 'grid' : 'none';
+  if (name === 'check') setMode('棚卸'); // 棚卸表は常に棚卸モード
+  if (name === 'stock') renderStock();
+  if (name === 'history') renderHistory();
+  if (name === 'search') renderProductList($('searchBox').value);
+  if (name === 'check') renderCheck();
+  updateModeIndicator();
+}
+
+document.querySelectorAll('.modes button').forEach(b => b.onclick = () => {
+  setMode(b.dataset.mode);
+  if (b.dataset.mode === '棚卸') selectTab('check'); // 棚卸はチェックリストがホーム
+});
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => selectTab(b.dataset.tab));
+$('checkScanBtn').onclick = () => selectTab('scan'); // 棚卸モードのままスキャン画面へ
+updateModeIndicator();
 
 // ================= 写真を撮って読み取り（どの環境でも動く） =================
 const SCAN_FORMATS_ = () => [
