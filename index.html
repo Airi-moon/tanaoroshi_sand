@@ -163,10 +163,15 @@
   <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
   <button id="camBtn" class="big-btn" style="background:#777">📷 ライブカメラでスキャン</button>
   <button id="noBarBtn" class="big-btn" style="background:#2d6a4f">🖼 バーコードが無い商品はこちら</button>
+  <div id="quickLinks" style="display:flex;gap:8px;margin-top:10px">
+    <button id="qlSearch" style="flex:1;padding:11px;font-size:14px;font-weight:700;border:2px solid var(--border);border-radius:10px;background:#fff;color:#555">🔍 商品検索</button>
+    <button id="qlHistory" style="flex:1;padding:11px;font-size:14px;font-weight:700;border:2px solid var(--border);border-radius:10px;background:#fff;color:#555">🕘 履歴・取消</button>
+  </div>
   <p class="hint">JAN（バーコード）・QRコードに対応。<b>読み取りのコツ</b>：バーコードから15〜20cm離し、枠の中に横向きに収めて2〜3秒静止（近すぎるとピントが合いません）。読めないときは「📸 写真を撮って読み取り」へ。バーコードの無い商品は「商品検索」タブから。</p>
 </div>
 
 <div id="panel-search" class="panel">
+  <button class="backToScan" style="display:none;width:100%;padding:10px;margin-bottom:10px;font-size:14px;font-weight:700;border:2px solid var(--border);border-radius:10px;background:#fff;color:#555">← スキャンに戻る</button>
   <div class="modeIndicator"></div>
   <input id="searchBox" placeholder="商品番号・商品名・JANで検索" autocomplete="off">
   <div id="productList" class="plist"></div>
@@ -194,6 +199,7 @@
 </div>
 
 <div id="panel-history" class="panel">
+  <button class="backToScan" style="display:none;width:100%;padding:10px;margin-bottom:10px;font-size:14px;font-weight:700;border:2px solid var(--border);border-radius:10px;background:#fff;color:#555">← スキャンに戻る</button>
   <div id="historyList"></div>
 </div>
 
@@ -227,6 +233,10 @@
   <div class="field" id="toStoreField" style="display:none">
     <label>譲渡先の店舗</label>
     <select id="toStoreSel"></select>
+  </div>
+  <div class="field" id="dateField" style="display:none">
+    <label>貸し借りした日（実際の日付が今日と違う場合は変更）</label>
+    <input id="eventDate" type="date">
   </div>
   <div class="field" id="regFields" style="display:none">
     <label>マスタに無いバーコードです。どうしますか？</label>
@@ -307,7 +317,8 @@ const demo = {
   saveRecord(rec) {
     const d = this.load();
     rec.row = d.logs.length + 2;
-    rec.ts = new Date().toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const base = rec.eventDate ? new Date(rec.eventDate + 'T12:00:00') : new Date();
+    rec.ts = base.toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
     rec.cancelled = false;
     d.logs.push(rec);
     this.save(d);
@@ -449,13 +460,18 @@ function setMode(m) {
   updateModeIndicator();
 }
 
+// モードが最上位ナビ：入荷/業務転用/譲渡=スキャン画面のみ（タブ非表示）、棚卸=全タブ表示
+function applyModeLayout() {
+  const isTana = (mode === '棚卸');
+  document.querySelector('.tabs').style.display = isTana ? 'flex' : 'none';
+  $('quickLinks').style.display = isTana ? 'none' : 'flex';
+  document.querySelectorAll('.backToScan').forEach(el => el.style.display = isTana ? 'none' : 'block');
+}
+
 function selectTab(name) {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
   document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
   $('panel-' + name).classList.add('active');
-  // モードボタンは「記録する画面」（スキャン・商品検索）のときだけ表示
-  $('modeRow').style.display = (name === 'scan' || name === 'search') ? 'grid' : 'none';
-  if (name === 'check') setMode('棚卸'); // 棚卸表は常に棚卸モード
   if (name === 'stock') renderStock();
   if (name === 'history') renderHistory();
   if (name === 'search') renderProductList($('searchBox').value);
@@ -465,10 +481,16 @@ function selectTab(name) {
 
 document.querySelectorAll('.modes button').forEach(b => b.onclick = () => {
   setMode(b.dataset.mode);
-  if (b.dataset.mode === '棚卸') selectTab('check'); // 棚卸はチェックリストがホーム
+  applyModeLayout();
+  // 棚卸はチェックリストがホーム、それ以外はスキャン画面
+  selectTab(b.dataset.mode === '棚卸' ? 'check' : 'scan');
 });
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => selectTab(b.dataset.tab));
 $('checkScanBtn').onclick = () => selectTab('scan'); // 棚卸モードのままスキャン画面へ
+$('qlSearch').onclick = () => selectTab('search');
+$('qlHistory').onclick = () => selectTab('history');
+document.querySelectorAll('.backToScan').forEach(el => el.onclick = () => selectTab('scan'));
+applyModeLayout();
 updateModeIndicator();
 
 // ================= 写真を撮って読み取り（どの環境でも動く） =================
@@ -917,8 +939,12 @@ function openSheet(product, scannedCode) {
   }
 
   $('toStoreField').style.display = mode === '譲渡' ? 'block' : 'none';
+  $('dateField').style.display = mode === '譲渡' ? 'block' : 'none';
   if (mode === '譲渡') {
     $('toStoreSel').innerHTML = S.stores.filter(s => s !== store).map(s => `<option>${esc(s)}</option>`).join('');
+    // 貸し借りした日：デフォルトは今日
+    const d = new Date();
+    $('eventDate').value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
   if (mode === '棚卸' && product) {
@@ -989,6 +1015,7 @@ $('shSave').onclick = async () => {
     type: mode, productNo: p.productNo, jan: p.jan, name: p.name,
     qty: effQty, store: store,
     toStore: mode === '譲渡' ? $('toStoreSel').value : '',
+    eventDate: mode === '譲渡' ? $('eventDate').value : '',  // 貸し借りした日（譲渡のみ）
     diff: null, staff: staffValue(),
     memo: isBox ? (`${qty}箱×${bq}個` + (memoText ? '／' + memoText : '')) : memoText
   };
