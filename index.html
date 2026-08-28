@@ -138,6 +138,11 @@
   .lother { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 12px; border: 1px dashed var(--border); border-radius: 10px; padding: 6px; color: #999; line-height: 1.35; }
   .lother.on { border-style: solid; border-color: #b7dfc3; color: #1a7f37; background: #f4fbf6; }
   .litem .lnote { font-size: 11px; color: #1a7f37; margin-top: 7px; }
+  /* どのモードでも見える「返却チェック」への入口 */
+  #loanAlert { display: none; width: 100%; text-align: left; border: none; border-bottom: 1px solid #e0c97f;
+    background: #fdf3d7; color: #7a5b00; font-size: 13px; font-weight: 700; padding: 11px 12px; }
+  #loanAlert.overdue { background: #ffe9e9; border-bottom-color: #e8b4b4; color: #b02a2a; }
+  #loanAlert .arrow { float: right; font-weight: 400; }
   #loanSummary .cnt { font-size: 14px; font-weight: 700; color: #333; }
 
   /* モードインジケータ（いま何として記録されるか） */
@@ -163,6 +168,8 @@
   </div>
 </header>
 
+<button id="loanAlert"></button>
+
 <div class="modes" id="modeRow">
   <button data-mode="入荷" class="active">📥 入荷</button>
   <button data-mode="業務転用">🧴 業務転用</button>
@@ -172,7 +179,7 @@
 
 <div class="tabs">
   <button data-tab="scan" class="active">スキャン</button>
-  <button data-tab="loan">貸し借り</button>
+  <button data-tab="loan">返却チェック</button>
   <button data-tab="search">商品検索</button>
   <button data-tab="check">棚卸表</button>
   <button data-tab="stock">在庫</button>
@@ -508,7 +515,7 @@ function staffValue() {
 const MODE_DESC = {
   '入荷': '📥 入荷モード：スキャンした商品を「店舗への入荷」として記録します',
   '業務転用': '🧴 業務転用モード：店舗販売用→業務用への切り替えとして記録します',
-  '譲渡': '🔁 譲渡モード：他店舗への譲渡として記録します（保存時に譲渡先を選択）',
+  '譲渡': '🔁 譲渡モード：他店舗への貸し出しとして記録します（保存時に譲渡先を選択）。返却のチェックは上の「返却チェック」タブから',
   '棚卸': '📋 棚卸モード：数えた実数を棚卸として記録します'
 };
 
@@ -556,10 +563,13 @@ function selectTab(name) {
 }
 
 document.querySelectorAll('.modes button').forEach(b => b.onclick = () => {
-  setMode(b.dataset.mode);
+  const m = b.dataset.mode;
+  setMode(m);
   applyModeLayout();
-  // 棚卸はチェックリストがホーム、それ以外はスキャン画面
-  selectTab(b.dataset.mode === '棚卸' ? 'check' : 'scan');
+  // 棚卸はチェックリスト、譲渡は未返却があれば返却チェック、それ以外はスキャン画面がホーム
+  if (m === '棚卸') selectTab('check');
+  else if (m === '譲渡' && loanItemsFor($('storeSel').value).some(l => !loanDone(l))) selectTab('loan');
+  else selectTab('scan');
 });
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => selectTab(b.dataset.tab));
 $('checkScanBtn').onclick = () => selectTab('scan'); // 棚卸モードのままスキャン画面へ
@@ -824,12 +834,25 @@ function setLoanFilter(f) {
 $('loanFilterOpen').onclick = () => setLoanFilter('open');
 $('loanFilterAll').onclick = () => setLoanFilter('all');
 
+// どのモードにいても見えるお知らせバー（未完了があるときだけ出る）
+function updateLoanAlert() {
+  const el = $('loanAlert');
+  const items = loanItemsFor($('storeSel').value).filter(l => !loanDone(l));
+  if (!items.length) { el.style.display = 'none'; return; }
+  const over = items.filter(loanOverdue).length;
+  el.style.display = 'block';
+  el.className = over ? 'overdue' : '';
+  el.innerHTML = `🔁 返却チェックが <b>${items.length}件</b> 未完了です` +
+    (over ? `（うち${over}件は期限超過）` : '') + '<span class="arrow">タップで開く ▶</span>';
+}
+$('loanAlert').onclick = () => { setMode('譲渡'); applyModeLayout(); selectTab('loan'); };
+
 // タブに未完了件数のバッジを出す
 function updateLoanBadge() {
   const btn = document.querySelector('.tabs button[data-tab="loan"]');
   if (!btn) return;
   const n = loanItemsFor($('storeSel').value).filter(l => !loanDone(l)).length;
-  btn.innerHTML = '貸し借り' + (n ? ` <span class="tbadge">${n}</span>` : '');
+  btn.innerHTML = '返却チェック' + (n ? ` <span class="tbadge">${n}</span>` : '');
 }
 
 function renderLoan() {
@@ -1237,6 +1260,7 @@ function renderAll() {
   renderStock();
   renderHistory();
   updateLoanBadge();
+  updateLoanAlert();
   if ($('panel-check').classList.contains('active')) renderCheck();
   if ($('panel-loan').classList.contains('active')) renderLoan();
 }
