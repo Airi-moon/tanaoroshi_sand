@@ -38,9 +38,13 @@
   .panel { display: none; padding: 12px; }
   .panel.active { display: block; }
 
-  /* 注意: CSSで映像を切り取ると「見えている枠」と「解析している領域」がズレて読めなくなる。
-     コンパクト表示はvideoConstraintsのaspectRatio（横長要求）で実現し、CSSでは切り取らない */
-  #reader { width: 100%; border-radius: 12px; overflow: hidden; background: #000; min-height: 60px; }
+  /* カメラの小型化は「額縁方式」: 映像(#reader内のvideo)はフルサイズのまま触らず、
+     外側の#readerWrapで中央の帯だけを見せる。映像要素自体をCSSで縮めると
+     解析領域とズレて読めなくなるので絶対にやらないこと（実績あり） */
+  #readerWrap { border-radius: 12px; overflow: hidden; background: #000; position: relative; }
+  #readerWrap.scanning { height: 30vh; }
+  #readerWrap.scanning #reader { position: absolute; top: 50%; left: 0; width: 100%; transform: translateY(-50%); }
+  #reader { width: 100%; background: #000; min-height: 60px; }
   .big-btn { width: 100%; padding: 14px; font-size: 16px; font-weight: 700; border: none; border-radius: 12px; background: var(--accent); color: #fff; margin-top: 10px; }
   .big-btn.stop { background: #888; }
   .hint { font-size: 12px; color: #888; margin-top: 8px; text-align: center; }
@@ -192,7 +196,7 @@
 
 <div id="panel-scan" class="panel active">
   <div class="modeIndicator"></div>
-  <div id="reader"></div>
+  <div id="readerWrap"><div id="reader"></div></div>
   <button id="photoBtn" class="big-btn">📸 写真を撮って読み取り</button>
   <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
   <button id="camBtn" class="big-btn" style="background:#777">📷 ライブカメラでスキャン</button>
@@ -626,26 +630,21 @@ $('camBtn').onclick = async () => {
       formatsToSupport: SCAN_FORMATS_(),
       experimentalFeatures: { useBarCodeDetectorIfSupported: true } // 対応端末ではブラウザ内蔵の高速検出を使う
     });
-    // 注意: CSSで映像を切り取ると解析領域とズレて読めなくなる（実績あり）。
-    // カメラの小型化は「カメラ自体に横長映像を要求(aspectRatio exact)」でのみ行う。
-    // exact指定に応えられない機種では縦長のまま起動する（表示は大きいが読み取りは正常）。
-    const camConfig = (aspect) => ({
-      fps: 30,
-      // 反転画像の再試行をしない分だけ速くなる（商品バーコードは鏡写しにならないため）
-      disableFlip: true,
-      // バーコードは横長なので、スキャン枠を広めに取る
-      qrbox: (vw, vh) => ({ width: Math.floor(vw * 0.9), height: Math.max(100, Math.floor(vh * 0.5)) }),
-      // 高解像度必須（バーコードの細い縞を判別するため。1280に下げたら読めなくなった実績あり）
-      videoConstraints: aspect
-        ? { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { exact: 16 / 9 } }
-        : { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
-    });
-    try {
-      await scanner.start({ facingMode: 'environment' }, camConfig(true), onScan);
-    } catch (e1) {
-      // 横長指定に応えられない機種 → 指定なしで再起動（縦長表示だが読み取りは正常）
-      await scanner.start({ facingMode: 'environment' }, camConfig(false), onScan);
-    }
+    // 映像は読み取り実績のある設定そのまま。表示だけ#readerWrap（額縁）で中央の帯を見せる
+    await scanner.start(
+      { facingMode: 'environment' },
+      {
+        fps: 30,
+        // 反転画像の再試行をしない分だけ速くなる（商品バーコードは鏡写しにならないため）
+        disableFlip: true,
+        // バーコードは横長なので、スキャン枠を広めに取る
+        qrbox: (vw, vh) => ({ width: Math.floor(vw * 0.9), height: Math.max(100, Math.floor(vh * 0.5)) }),
+        // 高解像度必須（バーコードの細い縞を判別するため。1280に下げたら読めなくなった実績あり）
+        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+      },
+      onScan
+    );
+    $('readerWrap').classList.add('scanning'); // 額縁を有効化（表示のみ小さく、映像はそのまま）
     // iPhone Pro対策: 主カメラは約20cmより近くにピントが合わない（Webはマクロ自動切替が効かない）。
     // ズーム2倍にして、ピントの合う距離のままバーコードを大きく写せるようにする。
     try {
@@ -672,6 +671,7 @@ $('camBtn').onclick = async () => {
 async function stopScan() {
   if (scanner && scanning) { try { await scanner.stop(); scanner.clear(); } catch (e) {} }
   scanning = false;
+  $('readerWrap').classList.remove('scanning'); // 額縁を解除
   $('camBtn').textContent = '📷 カメラを起動してスキャン';
   $('camBtn').classList.remove('stop');
 }
