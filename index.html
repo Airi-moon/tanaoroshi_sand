@@ -626,20 +626,26 @@ $('camBtn').onclick = async () => {
       formatsToSupport: SCAN_FORMATS_(),
       experimentalFeatures: { useBarCodeDetectorIfSupported: true } // 対応端末ではブラウザ内蔵の高速検出を使う
     });
-    await scanner.start(
-      { facingMode: 'environment' },
-      {
-        fps: 30,
-        // 反転画像の再試行をしない分だけ速くなる（商品バーコードは鏡写しにならないため）
-        disableFlip: true,
-        // バーコードは横長なので、スキャン枠を広めに取る
-        qrbox: (vw, vh) => ({ width: Math.floor(vw * 0.9), height: Math.max(100, Math.floor(vh * 0.5)) }),
-        // 高解像度必須（バーコードの細い縞を判別するため。1280に下げたら読めなくなった実績あり）
-        // aspectRatioで横長の映像を要求し、カメラ表示と解析範囲のズレを防ぐ
-        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { ideal: 1.7778 } }
-      },
-      onScan
-    );
+    // 注意: CSSで映像を切り取ると解析領域とズレて読めなくなる（実績あり）。
+    // カメラの小型化は「カメラ自体に横長映像を要求(aspectRatio exact)」でのみ行う。
+    // exact指定に応えられない機種では縦長のまま起動する（表示は大きいが読み取りは正常）。
+    const camConfig = (aspect) => ({
+      fps: 30,
+      // 反転画像の再試行をしない分だけ速くなる（商品バーコードは鏡写しにならないため）
+      disableFlip: true,
+      // バーコードは横長なので、スキャン枠を広めに取る
+      qrbox: (vw, vh) => ({ width: Math.floor(vw * 0.9), height: Math.max(100, Math.floor(vh * 0.5)) }),
+      // 高解像度必須（バーコードの細い縞を判別するため。1280に下げたら読めなくなった実績あり）
+      videoConstraints: aspect
+        ? { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { exact: 16 / 9 } }
+        : { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+    try {
+      await scanner.start({ facingMode: 'environment' }, camConfig(true), onScan);
+    } catch (e1) {
+      // 横長指定に応えられない機種 → 指定なしで再起動（縦長表示だが読み取りは正常）
+      await scanner.start({ facingMode: 'environment' }, camConfig(false), onScan);
+    }
     // iPhone Pro対策: 主カメラは約20cmより近くにピントが合わない（Webはマクロ自動切替が効かない）。
     // ズーム2倍にして、ピントの合う距離のままバーコードを大きく写せるようにする。
     try {
