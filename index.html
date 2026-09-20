@@ -88,7 +88,8 @@
   .sheet-btns .save { background: var(--accent); color: #fff; }
   .sheet-btns .cancel { background: #eee; color: #555; }
 
-  #toast { position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 14px; opacity: 0; transition: opacity .3s; z-index: 30; pointer-events: none; white-space: nowrap; }
+  /* エラー文が長くてもスマホ画面に収まるよう折り返す */
+  #toast { position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 10px 18px; border-radius: 16px; font-size: 14px; line-height: 1.5; opacity: 0; transition: opacity .3s; z-index: 30; pointer-events: none; white-space: normal; width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box; text-align: center; }
   #toast.show { opacity: 1; }
 
   /* バーコード無し商品ピッカー */
@@ -585,11 +586,12 @@ applyModeLayout();
 updateModeIndicator();
 
 // ================= 写真を撮って読み取り（どの環境でも動く） =================
-// 対象フォーマットは実際に使う4種だけに絞る（種類が多いほど毎フレームの解析が遅くなる）
-// EAN_13/EAN_8=JANコード、UPC_A=海外製品、ITF=業務用外箱の14桁バーコード
+// 対象フォーマット: JAN(EAN13/8)・海外UPC・外箱ITFに加え、サロン専売品等で使われるCODE128/39も対応
+// （QRコードだけ除外。商品識別には使われず、解析が重いため）
 const SCAN_FORMATS_ = () => [
   Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
-  Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.ITF
+  Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.ITF,
+  Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39
 ];
 
 $('photoBtn').onclick = () => $('photoInput').click();
