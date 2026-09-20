@@ -38,9 +38,9 @@
   .panel { display: none; padding: 12px; }
   .panel.active { display: block; }
 
-  /* カメラは画面の4割まで。メニュー・カメラ・下のボタンが1画面に収まる高さにする */
-  #reader { width: 100%; border-radius: 12px; overflow: hidden; background: #000; min-height: 60px; max-height: 38vh; }
-  #reader video { width: 100% !important; max-height: 38vh !important; object-fit: cover; }
+  /* 注意: CSSで映像を切り取ると「見えている枠」と「解析している領域」がズレて読めなくなる。
+     コンパクト表示はvideoConstraintsのaspectRatio（横長要求）で実現し、CSSでは切り取らない */
+  #reader { width: 100%; border-radius: 12px; overflow: hidden; background: #000; min-height: 60px; }
   .big-btn { width: 100%; padding: 14px; font-size: 16px; font-weight: 700; border: none; border-radius: 12px; background: var(--accent); color: #fff; margin-top: 10px; }
   .big-btn.stop { background: #888; }
   .hint { font-size: 12px; color: #888; margin-top: 8px; text-align: center; }
