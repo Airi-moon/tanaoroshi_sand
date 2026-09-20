@@ -197,15 +197,16 @@
 <div id="panel-scan" class="panel active">
   <div class="modeIndicator"></div>
   <div id="readerWrap"><div id="reader"></div></div>
-  <button id="photoBtn" class="big-btn">📸 写真を撮って読み取り</button>
-  <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
+  <button id="photoBtn" class="big-btn">🖼 アルバムの写真から読み取り</button>
+  <!-- capture属性なし: タップするとiPhoneは「フォトライブラリ/写真を撮る」の選択肢を出す -->
+  <input type="file" id="photoInput" accept="image/*" style="display:none">
   <button id="camBtn" class="big-btn" style="background:#777">📷 ライブカメラでスキャン</button>
   <button id="noBarBtn" class="big-btn" style="background:#2d6a4f">🖼 バーコードが無い商品はこちら</button>
   <div id="quickLinks" style="display:flex;gap:8px;margin-top:10px">
     <button id="qlSearch" style="flex:1;padding:11px;font-size:14px;font-weight:700;border:2px solid var(--border);border-radius:10px;background:#fff;color:#555">🔍 商品検索</button>
     <button id="qlHistory" style="flex:1;padding:11px;font-size:14px;font-weight:700;border:2px solid var(--border);border-radius:10px;background:#fff;color:#555">🕘 履歴・取消</button>
   </div>
-  <p class="hint">JAN（バーコード）・QRコードに対応。<b>読み取りのコツ</b>：バーコードから15〜20cm離し、枠の中に横向きに収めて2〜3秒静止（近すぎるとピントが合いません）。読めないときは「📸 写真を撮って読み取り」へ。バーコードの無い商品は「商品検索」タブから。</p>
+  <p class="hint"><b>読み取りのコツ</b>：バーコードから15〜20cm離し、枠の中に横向きに収めて2〜3秒静止（近すぎるとピントが合いません）。カメラで読めないときは、バーコードの写真を撮っておいて「🖼 アルバムの写真から読み取り」へ。バーコードの無い商品は「商品検索」タブから。</p>
 </div>
 
 <div id="panel-search" class="panel">
@@ -617,7 +618,7 @@ $('photoInput').onchange = async () => {
     toast('読み取れませんでした。明るい場所でバーコード全体を大きく写してください');
   } finally {
     try { fileScanner.clear(); } catch (e) {}
-    $('photoBtn').textContent = '📸 写真を撮って読み取り';
+    $('photoBtn').textContent = '🖼 アルバムの写真から読み取り';
     $('photoBtn').disabled = false;
   }
 };
@@ -659,7 +660,7 @@ $('camBtn').onclick = async () => {
   } catch (e) {
     const msg = String((e && e.name) || e);
     if (msg.indexOf('NotAllowedError') !== -1) {
-      alert('ライブカメラが使えません。\n\nGoogleの仕様変更（2026年2月〜）により、GAS上のアプリではライブカメラがブロックされています。\n\n→ 上の「📸 写真を撮って読み取り」ボタンをお使いください（こちらはどの環境でも動きます）。\n\nそれ以外の環境でこのエラーが出る場合は、ブラウザのカメラ許可設定を確認するか、LINE等のアプリ内ブラウザではなくSafari/Chromeで直接開いてください。');
+      alert('ライブカメラが使えません。\n\nGoogleの仕様変更（2026年2月〜）により、GAS上のアプリではライブカメラがブロックされています。\n\n→ 上の「🖼 アルバムの写真から読み取り」ボタンをお使いください（写真を撮る/アルバムから選ぶ、どちらもできます）。\n\nそれ以外の環境でこのエラーが出る場合は、ブラウザのカメラ許可設定を確認するか、LINE等のアプリ内ブラウザではなくSafari/Chromeで直接開いてください。');
     } else if (msg.indexOf('NotFoundError') !== -1) {
       alert('カメラが見つかりません。カメラ付きのスマホ・タブレットでお試しください。');
     } else {
