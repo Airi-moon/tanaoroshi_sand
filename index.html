@@ -200,6 +200,8 @@
   <button id="photoBtn" class="big-btn">🖼 アルバムの写真から読み取り</button>
   <!-- capture属性なし: タップするとiPhoneは「フォトライブラリ/写真を撮る」の選択肢を出す -->
   <input type="file" id="photoInput" accept="image/*" style="display:none">
+  <!-- 写真解析用の隠し領域。幅を大きく取ることで、ライブラリの縮小による縞つぶれを防ぐ -->
+  <div id="fileReader" style="position:absolute;left:-99999px;top:0;width:1600px;height:1200px;overflow:hidden"></div>
   <button id="camBtn" class="big-btn" style="background:#777">📷 ライブカメラでスキャン</button>
   <button id="noBarBtn" class="big-btn" style="background:#2d6a4f">🖼 バーコードが無い商品はこちら</button>
   <div id="quickLinks" style="display:flex;gap:8px;margin-top:10px">
@@ -607,20 +609,67 @@ $('photoInput').onchange = async () => {
   if (scanning) await stopScan();
   $('photoBtn').textContent = '⏳ 読み取り中…';
   $('photoBtn').disabled = true;
-  const fileScanner = new Html5Qrcode('reader', {
+  try {
+    const text = await scanPhotoFile_(f);
+    onScan(text);
+  } catch (e) {
+    toast('バーコードを読み取れませんでした。バーコードが大きめ・正面に写った写真でもう一度お試しください');
+  } finally {
+    $('photoBtn').textContent = '🖼 アルバムの写真から読み取り';
+    $('photoBtn').disabled = false;
+  }
+};
+
+/**
+ * 写真ファイルからバーコードを読む。
+ * ライブラリは画像を表示領域の幅まで縮小してから解析するため、
+ * 写真の中でバーコードが小さいと縞が潰れて読めない。
+ * 対策: ①解析用の大きな隠し領域(1600px)を使う ②それでも読めなければ
+ * 写真を部分ごとに切り出して拡大し、順に再挑戦する。
+ */
+async function scanPhotoFile_(f) {
+  const sc = new Html5Qrcode('fileReader', {
     formatsToSupport: SCAN_FORMATS_(),
     experimentalFeatures: { useBarCodeDetectorIfSupported: true }
   });
   try {
-    const text = await fileScanner.scanFile(f, false);
-    onScan(text);
-  } catch (e) {
-    toast('読み取れませんでした。明るい場所でバーコード全体を大きく写してください');
+    try { return await sc.scanFile(f, false); } catch (e0) { /* 全体では読めず→切り出しへ */ }
+    const img = await loadImage_(f);
+    const crops = [
+      [0.15, 0.30, 0.70, 0.40], // 中央の帯
+      [0.00, 0.00, 1.00, 0.50], // 上半分
+      [0.00, 0.50, 1.00, 0.50], // 下半分
+      [0.25, 0.40, 0.50, 0.25]  // 中央ズーム
+    ];
+    for (const c of crops) {
+      try { return await sc.scanFile(await cropToFile_(img, c), false); } catch (e1) { /* 次のクロップへ */ }
+    }
+    throw new Error('バーコードが見つかりません');
   } finally {
-    try { fileScanner.clear(); } catch (e) {}
-    $('photoBtn').textContent = '🖼 アルバムの写真から読み取り';
-    $('photoBtn').disabled = false;
+    try { sc.clear(); } catch (e) {}
   }
+}
+
+function loadImage_(f) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(f);
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('画像を開けません')); };
+    img.src = url;
+  });
+}
+
+// 画像の一部(x,y,w,h: 0〜1の割合)を切り出し、幅1600px以内に整えてFile化する
+function cropToFile_(img, c) {
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const sx = W * c[0], sy = H * c[1], sw = W * c[2], sh = H * c[3];
+  const scale = Math.min(1, 1600 / sw);
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(sw * scale);
+  cv.height = Math.round(sh * scale);
+  cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+  return new Promise((resolve) => cv.toBlob((b) => resolve(new File([b], 'crop.jpg', { type: 'image/jpeg' })), 'image/jpeg', 0.92));
 };
 
 // ================= ライブカメラスキャン =================
@@ -769,7 +818,7 @@ function renderHistory() {
     <div class="hitem${l.cancelled ? ' cancelled' : ''}">
       <div class="top">
         <span><span class="badge ${l.type}">${isReturnBack(l) ? '↩︎ 返却' : l.type}</span> <b>${esc(l.name)}</b> × ${l.qty}</span>
-        ${l.cancelled || isReturnBack(l) ? '' : `<button class="cxl" data-row="${l.row}">取消</button>`}
+        ${l.cancelled || isReturnBack(l) ? '' : (l.row ? `<button class="cxl" data-row="${l.row}">取消</button>` : '<span class="hint">同期中…</span>')}
       </div>
       <div class="meta">${esc(l.ts)}｜${esc(l.store)}${l.toStore ? ' → ' + esc(l.toStore) : ''}${l.diff !== null && l.diff !== undefined && l.type === '棚卸' ? '｜差異 ' + (l.diff > 0 ? '+' : '') + l.diff : ''}${l.staff ? '｜' + esc(l.staff) : ''}</div>
     </div>`).join('') || '<p class="hint">まだ記録がありません</p>';
@@ -1106,7 +1155,12 @@ function setRegMode(m) {
   refreshUnitField();
 }
 $('regModeBind').onclick = () => setRegMode('bind');
-$('regModeNew').onclick = () => setRegMode('new');
+$('regModeNew').onclick = () => {
+  // 紐づけ検索で見つからず新規登録に切り替えるケースが多いので、検索語を商品名に引き継ぐ
+  const q = $('bindSearch').value.trim();
+  if (q && !$('regName').value.trim()) $('regName').value = q;
+  setRegMode('new');
+};
 
 $('bindSearch').oninput = () => renderBindList($('bindSearch').value);
 
@@ -1232,7 +1286,11 @@ $('shSave').onclick = async () => {
       // 既存商品にスキャンしたJANを紐づける
       if (!bindTarget) { toast('紐づける商品をリストから選択してください'); return; }
       if (!current.jan) { toast('紐づけるバーコードがありません'); return; }
-      const ok = await api('attachJan', { productNo: bindTarget.productNo, jan: current.jan });
+      $('shSave').disabled = true;
+      $('shSave').textContent = '⏳ 紐づけ中…';
+      let ok = false;
+      try { ok = await api('attachJan', { productNo: bindTarget.productNo, jan: current.jan }); }
+      finally { $('shSave').disabled = false; }
       if (!ok) { toast('紐づけに失敗しました（マスタに商品が見つかりません）'); return; }
       // 追記式：既存JANは残したまま、このバーコードも同じ商品として登録（まとめ商品対応）
       const jl = janList(bindTarget);
@@ -1249,7 +1307,8 @@ $('shSave').onclick = async () => {
         if (S.products.some(x => x.productNo === no)) no = no + '-' + Math.floor(Math.random() * 900 + 100);
       }
       p = { productNo: no, jan: current.jan || '', name: nm, category: '', price: '', boxQty: parseInt($('regBox').value, 10) || 0 };
-      await api('registerProduct', p);
+      // マスタ登録も裏で送る（失敗したら通知）。画面は待たせない
+      api('registerProduct', p).catch(e => toast('⚠️ 商品マスタへの登録に失敗: ' + nm + '（' + e.message + '）'));
       S.products.push(p);
     }
   }
@@ -1279,21 +1338,25 @@ $('shSave').onclick = async () => {
   }
   if (mode === '譲渡' && !rec.toStore) { toast('譲渡先を選択してください'); return; }
 
-  $('shSave').disabled = true;
-  try {
-    const r = await api('saveRecord', rec);
-    rec.row = r.row; rec.ts = r.ts; rec.cancelled = false;
-    S.logs.push(rec);
-    toast(mode === '棚卸'
-      ? `記録しました（差異 ${rec.diff > 0 ? '+' : ''}${rec.diff}）`
-      : `${mode}を記録しました：${p.name} × ${effQty}${isBox ? `（${qty}箱）` : ''}`);
-    closeSheet();
+  // ===== 楽観保存: 画面には即反映して閉じ、サーバー送信は裏で行う（待ち時間ゼロ） =====
+  rec.cancelled = false;
+  rec.row = null; // サーバー保存が終わるまで行番号なし（取消はその間ガードされる）
+  rec.ts = new Date().toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  S.logs.push(rec);
+  toast(mode === '棚卸'
+    ? `記録しました（差異 ${rec.diff > 0 ? '+' : ''}${rec.diff}）`
+    : `${mode}を記録しました：${p.name} × ${effQty}${isBox ? `（${qty}箱）` : ''}`);
+  closeSheet();
+  renderAll();
+  api('saveRecord', rec).then(r => {
+    rec.row = r.row; rec.ts = r.ts;
+  }).catch(e => {
+    // 送信失敗: 画面から取り下げて、やり直しをお願いする
+    const i = S.logs.indexOf(rec);
+    if (i !== -1) S.logs.splice(i, 1);
     renderAll();
-  } catch (e) {
-    toast('保存エラー: ' + e.message);
-  } finally {
-    $('shSave').disabled = false;
-  }
+    alert('⚠️ 通信エラーで記録を保存できませんでした。\n「' + p.name + ' × ' + effQty + '」をもう一度記録してください。\n(' + e.message + ')');
+  });
 };
 
 // ================= 共通 =================
