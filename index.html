@@ -585,11 +585,11 @@ applyModeLayout();
 updateModeIndicator();
 
 // ================= 写真を撮って読み取り（どの環境でも動く） =================
+// 対象フォーマットは実際に使う4種だけに絞る（種類が多いほど毎フレームの解析が遅くなる）
+// EAN_13/EAN_8=JANコード、UPC_A=海外製品、ITF=業務用外箱の14桁バーコード
 const SCAN_FORMATS_ = () => [
   Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
-  Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.ITF, // ITF=業務用外箱の14桁バーコード
-  Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39,
-  Html5QrcodeSupportedFormats.QR_CODE
+  Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.ITF
 ];
 
 $('photoBtn').onclick = () => $('photoInput').click();
@@ -632,8 +632,9 @@ $('camBtn').onclick = async () => {
         disableFlip: true,
         // バーコードは横長なので、スキャン枠を広めに取る
         qrbox: (vw, vh) => ({ width: Math.floor(vw * 0.9), height: Math.max(100, Math.floor(vh * 0.5)) }),
-        // 高解像度を要求（1次元バーコードの読み取りに必要）
-        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+        // 解像度は1280x720で十分（1920だとiPhoneの解析が重くて読み取りが遅くなる）
+        // aspectRatioで横長の映像を要求し、カメラ表示と解析範囲のズレを防ぐ
+        videoConstraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 }, aspectRatio: { ideal: 1.7778 } }
       },
       onScan
     );
