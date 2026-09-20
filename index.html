@@ -634,12 +634,20 @@ $('camBtn').onclick = async () => {
         disableFlip: true,
         // バーコードは横長なので、スキャン枠を広めに取る
         qrbox: (vw, vh) => ({ width: Math.floor(vw * 0.9), height: Math.max(100, Math.floor(vh * 0.5)) }),
-        // 解像度は1280x720で十分（1920だとiPhoneの解析が重くて読み取りが遅くなる）
+        // 高解像度必須（バーコードの細い縞を判別するため。1280に下げたら読めなくなった実績あり）
         // aspectRatioで横長の映像を要求し、カメラ表示と解析範囲のズレを防ぐ
-        videoConstraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 }, aspectRatio: { ideal: 1.7778 } }
+        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { ideal: 1.7778 } }
       },
       onScan
     );
+    // iPhone Pro対策: 主カメラは約20cmより近くにピントが合わない（Webはマクロ自動切替が効かない）。
+    // ズーム2倍にして、ピントの合う距離のままバーコードを大きく写せるようにする。
+    try {
+      const caps = scanner.getRunningTrackCapabilities();
+      if (caps && caps.zoom && caps.zoom.max >= 2) {
+        await scanner.applyVideoConstraints({ advanced: [{ zoom: Math.min(2, caps.zoom.max) }] });
+      }
+    } catch (e) { /* ズーム非対応端末は等倍のまま */ }
     scanning = true;
     $('camBtn').textContent = '⏹ カメラを停止';
     $('camBtn').classList.add('stop');
