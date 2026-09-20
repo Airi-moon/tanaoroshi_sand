@@ -383,7 +383,9 @@ const demo = {
     const d = this.load();
     const p = d.products.find(x => x.productNo === req.productNo);
     if (!p) return false;
-    p.jan = req.jan;
+    const list = String(p.jan || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!list.includes(String(req.jan).trim())) list.push(String(req.jan).trim());
+    p.jan = list.join(',');
     this.save(d);
     return true;
   },
@@ -652,17 +654,25 @@ async function stopScan() {
   $('camBtn').classList.remove('stop');
 }
 
+// 1商品に複数JAN（カンマ区切り）を持てる。まとめ商品（例:イルミナライトニング カラー）に各色のJANをぶら下げる
+function janList(p) { return String(p.jan || '').split(',').map(s => s.trim()).filter(Boolean); }
+function janLabel(p) {
+  const jl = janList(p);
+  if (!jl.length) return '';
+  return ' / JAN:' + jl[0] + (jl.length > 1 ? ' 他' + (jl.length - 1) + '件' : '');
+}
+
 function onScan(code) {
   const now = Date.now();
   if (code === lastCode && now - lastCodeAt < 2500) return; // 連続読み取り防止
   lastCode = code; lastCodeAt = now;
   beep(); if (navigator.vibrate) navigator.vibrate(80);
-  let p = S.products.find(x => x.jan === code || x.productNo === code);
+  let p = S.products.find(x => janList(x).includes(code) || x.productNo === code);
   // 外箱のITF-14（14桁）は中身のJANと番号が違うため、JANに変換して再照合する
   // （ITF-14 = 梱包指示子1桁 + JANの先頭12桁 + チェック数字）
   if (!p && /^\d{14}$/.test(code)) {
     const jan13 = code.slice(1, 13) + ean13Check_(code.slice(1, 13));
-    const hit = S.products.find(x => x.jan === jan13);
+    const hit = S.products.find(x => janList(x).includes(jan13));
     if (hit) { p = hit; code = jan13; }
   }
   openSheet(p || null, code);
@@ -697,7 +707,7 @@ function renderProductList(q) {
   $('productList').innerHTML = list.map((p, i) => `
     <div class="pitem" data-i="${S.products.indexOf(p)}">
       <div><div class="nm">${esc(p.name)}</div>
-      <div class="sub">${esc(p.productNo)}${p.jan ? ' / JAN:' + esc(p.jan) : ''}${+p.boxQty > 0 ? ' / 1箱' + (+p.boxQty) + '個' : ''}</div></div>
+      <div class="sub">${esc(p.productNo)}${esc(janLabel(p))}${+p.boxQty > 0 ? ' / 1箱' + (+p.boxQty) + '個' : ''}</div></div>
       <div class="stk">在庫 ${stock[p.productNo + '|' + store] || 0}</div>
     </div>`).join('') || '<p class="hint">該当する商品がありません</p>';
   document.querySelectorAll('.pitem').forEach(el => el.onclick = () => openSheet(S.products[+el.dataset.i], ''));
@@ -1131,7 +1141,7 @@ function openSheet(product, scannedCode) {
 
   if (product) {
     $('shName').textContent = product.name;
-    $('shCode').textContent = product.productNo + (product.jan ? ' / JAN:' + product.jan : '');
+    $('shCode').textContent = product.productNo + janLabel(product);
     $('regFields').style.display = 'none';
   } else {
     $('shName').textContent = 'マスタに無いバーコード';
@@ -1201,7 +1211,10 @@ $('shSave').onclick = async () => {
       if (!current.jan) { toast('紐づけるバーコードがありません'); return; }
       const ok = await api('attachJan', { productNo: bindTarget.productNo, jan: current.jan });
       if (!ok) { toast('紐づけに失敗しました（マスタに商品が見つかりません）'); return; }
-      bindTarget.jan = current.jan; // 次回からスキャン一発で照合される
+      // 追記式：既存JANは残したまま、このバーコードも同じ商品として登録（まとめ商品対応）
+      const jl = janList(bindTarget);
+      if (!jl.includes(current.jan)) jl.push(current.jan);
+      bindTarget.jan = jl.join(',');
       p = bindTarget;
     } else {
       const no = $('regNo').value.trim(), nm = $('regName').value.trim();
