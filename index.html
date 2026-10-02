@@ -274,6 +274,11 @@
       <button type="button" id="unitPiece" class="active">個</button>
       <button type="button" id="unitBox">箱</button>
     </div>
+    <!-- 発注ごとに入数が違う商品に対応: 箱を選んだときだけ、今回の入数を手で直せる -->
+    <div id="boxQtyRow" style="display:none;margin-top:8px">
+      <label>1箱あたりの個数（今回届いた箱の中身に合わせて変更OK）</label>
+      <input id="boxQtyInput" type="number" inputmode="numeric" min="1" placeholder="例: 12">
+    </div>
   </div>
   <div class="qty-row">
     <button id="qMinus">−</button>
@@ -293,12 +298,14 @@
     <label>マスタに無いバーコードです。どうしますか？</label>
     <div class="unit-row" style="margin-bottom:8px">
       <button type="button" id="regModeBind" class="active">既存の商品に紐づける</button>
-      <button type="button" id="regModeNew">新規登録</button>
+      <!-- 新規登録は原則本部で行うため、押し間違えないよう小さく控えめに表示 -->
+      <button type="button" id="regModeNew" style="flex:0 0 auto;font-size:11px;font-weight:400;padding:6px 10px;align-self:center;opacity:.8">新規登録</button>
     </div>
     <div id="regBindArea">
       <input id="bindSearch" placeholder="商品名・メーカーで検索" autocomplete="off">
       <div id="bindList" style="max-height:180px;overflow-y:auto;margin-top:6px"></div>
       <div id="bindChosen" class="theo" style="display:none"></div>
+      <p class="hint" style="margin-top:6px">探しても見つからないときは、無理に登録せず本部（若月）までご連絡ください</p>
     </div>
     <div id="regNewArea" style="display:none">
       <input id="regNo" placeholder="商品番号（空欄なら自動で付きます）" style="margin-bottom:6px">
@@ -1058,7 +1065,24 @@ function renderCheck() {
   }
   const ex = S.excluded || {};
   const isExcluded = p => (ex[p.productNo] || []).includes(store) && !pairHasLog.has(p.productNo);
-  let done = 0, excluded = 0;
+
+  // 前回の棚卸が0個で、その後の入荷・移動・転用が1件も無い商品は棚卸表に出さない
+  // （何か記録が入れば自動で復活する。「取扱なし」フィルタから確認・復活も可能）
+  const lastMove = {};
+  for (const l of S.logs) {
+    if (l.cancelled || l.type === '棚卸') continue;
+    if (l.store !== store && l.toStore !== store) continue;
+    const t = String(l.ts || '').replace(/\//g, '-');
+    if (!lastMove[l.productNo] || t > lastMove[l.productNo]) lastMove[l.productNo] = t;
+  }
+  const isDormant = p => {
+    const e = m[p.productNo];
+    if (!e || e.cur || !e.prev || Number(e.prev.qty) !== 0) return false;
+    const mv = lastMove[p.productNo];
+    return !mv || mv <= String(e.prev.ts || '').replace(/\//g, '-');
+  };
+
+  let done = 0, excluded = 0, dormant = 0;
   let total = 0;
   const rows = [];
   const LIMIT = 400;
@@ -1073,6 +1097,17 @@ function renderCheck() {
         rows.push(`<div class="citem ex" data-no="${esc(p.productNo)}">
            <div><div class="nm">${esc(p.name)}</div><div class="sub">${esc(p.category || '')}｜過去3ヶ月在庫0のため対象外</div></div>
            <div class="st">取扱なし</div>
+         </div>`);
+      }
+      continue;
+    }
+    if (isDormant(p)) {
+      dormant++;
+      if (checkFilter === 'excluded' && matchQ(p)) {
+        if (rows.length >= LIMIT) { hidden++; continue; }
+        rows.push(`<div class="citem ex" data-no="${esc(p.productNo)}">
+           <div><div class="nm">${esc(p.name)}</div><div class="sub">${esc(p.category || '')}｜前回の棚卸が0個（その後の動きなし）のため非表示</div></div>
+           <div class="st">在庫0</div>
          </div>`);
       }
       continue;
@@ -1102,7 +1137,7 @@ function renderCheck() {
   $('checkProgress').innerHTML =
     `<span class="cnt">${esc(store)}：済 ${done} / ${total}（${pct}%）</span>
      <div class="pbar"><div class="pfill" style="width:${pct}%"></div></div>` +
-    (excluded ? `<div style="font-size:11px;color:#999;margin-top:3px">このほか ${excluded} 商品はこの店舗では取扱なし（棚卸対象外）</div>` : '');
+    ((excluded || dormant) ? `<div style="font-size:11px;color:#999;margin-top:3px">このほか ${[excluded ? `取扱なし ${excluded}商品` : '', dormant ? `前回在庫0 ${dormant}商品` : ''].filter(Boolean).join(' ／ ')} は表示していません（「取扱なし」タブで確認できます）</div>` : '');
   $('checkList').innerHTML = rows.join('') ||
     (checkFilter === 'excluded'
       ? '<p class="hint">この店舗に取扱なし設定の商品はありません</p>'
@@ -1185,7 +1220,8 @@ function renderBindList(q) {
 }
 
 // ================= 単位（個/箱）切り替え =================
-function boxQtyForCurrent() {
+// マスタの入数（初期値として使う）
+function masterBoxQty_() {
   if (!current) return 0;
   if (current.isNew) {
     if (regMode === 'bind') return (bindTarget && +bindTarget.boxQty) || 0;
@@ -1194,22 +1230,38 @@ function boxQtyForCurrent() {
   return (current.product && +current.product.boxQty) || 0;
 }
 
+// 実際に計算に使う入数: 箱を選んでいるときは入力欄の値（発注ごとに中身が違う商品に対応）
+function boxQtyForCurrent() {
+  if (unit === 'box') return parseInt($('boxQtyInput').value, 10) || 0;
+  return masterBoxQty_();
+}
+
 function refreshUnitField() {
-  const bq = boxQtyForCurrent();
-  const show = mode !== '棚卸' && bq > 0;
+  // 入数がマスタに無い商品でも「箱」を選べる（その場で入数を入力）
+  const show = mode !== '棚卸';
   $('unitField').style.display = show ? 'block' : 'none';
   if (!show) unit = 'piece';
-  $('unitBox').textContent = `箱（${bq}個入）`;
   $('unitPiece').classList.toggle('active', unit === 'piece');
   $('unitBox').classList.toggle('active', unit === 'box');
+  $('boxQtyRow').style.display = (show && unit === 'box') ? 'block' : 'none';
+  const bq = boxQtyForCurrent();
+  $('unitBox').textContent = '箱';
   const q = +$('qtyInput').value || 0;
-  $('boxCalc').textContent = (show && unit === 'box') ? `${q}箱 = 合計 ${q * bq} 個として記録します` : '';
+  $('boxCalc').textContent = (show && unit === 'box')
+    ? (bq > 0 ? `${q}箱 × ${bq}個入 = 合計 ${q * bq} 個として記録します` : '1箱あたりの個数を入力してください')
+    : '';
 }
 
 $('unitPiece').onclick = () => { unit = 'piece'; refreshUnitField(); };
-$('unitBox').onclick = () => { unit = 'box'; refreshUnitField(); };
+$('unitBox').onclick = () => {
+  unit = 'box';
+  // 入数欄が空ならマスタの入数を初期値として入れる
+  if (!$('boxQtyInput').value && masterBoxQty_() > 0) $('boxQtyInput').value = masterBoxQty_();
+  refreshUnitField();
+};
 $('qtyInput').oninput = refreshUnitField;
 $('regBox').oninput = refreshUnitField;
+$('boxQtyInput').oninput = refreshUnitField;
 
 // ================= 確認シート =================
 function openSheet(product, scannedCode) {
@@ -1257,6 +1309,7 @@ function openSheet(product, scannedCode) {
 
   $('memoInput').value = '';
   unit = 'piece';
+  $('boxQtyInput').value = masterBoxQty_() || '';
   refreshUnitField();
   $('shSave').textContent = { '入荷': '📥 入荷を記録', '業務転用': '🧴 業務転用を記録', '譲渡': '🔁 譲渡を記録', '棚卸': '📋 実数を記録' }[mode];
   $('overlay').style.display = 'block';
@@ -1315,6 +1368,7 @@ $('shSave').onclick = async () => {
 
   // 箱単位なら個数に換算して記録（在庫はすべて「個」で管理）
   const bq = boxQtyForCurrent();
+  if (unit === 'box' && mode !== '棚卸' && bq <= 0) { toast('1箱あたりの個数を入力してください'); return; }
   const isBox = unit === 'box' && bq > 0 && mode !== '棚卸';
   const effQty = isBox ? qty * bq : qty;
   const memoText = $('memoInput').value.trim();
