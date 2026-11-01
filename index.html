@@ -229,6 +229,13 @@
 </div>
 
 <div id="panel-check" class="panel">
+  <div id="tanaMonthBar" style="display:none">
+    <div class="unit-row" style="margin:0 0 4px">
+      <button type="button" id="tanaPrevBtn"></button>
+      <button type="button" id="tanaCurBtn"></button>
+    </div>
+    <p class="hint" id="tanaMonthHint" style="margin:0 0 8px"></p>
+  </div>
   <div id="checkProgress"></div>
   <button id="checkScanBtn" class="big-btn" style="background:var(--stocktake);margin-top:8px">📷 バーコードをスキャンして数える</button>
   <div class="unit-row" style="margin:10px 0 8px">
@@ -715,10 +722,15 @@ $('camBtn').onclick = async () => {
     $('camBtn').classList.add('stop');
   } catch (e) {
     const msg = String((e && e.name) || e);
-    if (msg.indexOf('NotAllowedError') !== -1) {
-      alert('ライブカメラが使えません。\n\nGoogleの仕様変更（2026年2月〜）により、GAS上のアプリではライブカメラがブロックされています。\n\n→ 上の「🖼 アルバムの写真から読み取り」ボタンをお使いください（写真を撮る/アルバムから選ぶ、どちらもできます）。\n\nそれ以外の環境でこのエラーが出る場合は、ブラウザのカメラ許可設定を確認するか、LINE等のアプリ内ブラウザではなくSafari/Chromeで直接開いてください。');
+    if (/google/.test(location.hostname)) {
+      // 旧URL（GAS上）で開かれている: Googleの制限でカメラは使えない
+      alert('このページは旧URL（Google上の旧版）で開かれています。旧版ではカメラが使えません。\n\n新しいアプリはこちら↓\nhttps://airi-moon.github.io/tanaoroshi_sand/\n\nSlackの最新リンクから開き直して、「ホーム画面に追加」もやり直してください。\n（それまでは「🖼 アルバムの写真から読み取り」なら使えます）');
+    } else if (msg.indexOf('NotAllowedError') !== -1) {
+      alert('カメラの使用が許可されていません。\n\n【Safariで開いている場合】\nアドレスバー左の「ぁあ」→「Webサイトの設定」→「カメラ」を「許可」にして、ページを再読み込みしてください。\n（iPhoneの「設定」→「Safari」→「カメラ」が「拒否」になっていないかも確認）\n\n【LINEやSlackの中から開いた場合】\nアプリ内ブラウザではカメラが使えないことがあります。SafariかChromeで直接開いてください。\n\n今すぐ記録したいときは「🖼 アルバムの写真から読み取り」でもスキャンできます（バーコードの写真を撮る→読み取り）。');
     } else if (msg.indexOf('NotFoundError') !== -1) {
       alert('カメラが見つかりません。カメラ付きのスマホ・タブレットでお試しください。');
+    } else if (msg.indexOf('NotReadableError') !== -1) {
+      alert('カメラを起動できませんでした。他のアプリがカメラを使っていないか確認して、ブラウザを一度閉じてから開き直してください。');
     } else {
       toast('カメラを起動できません: ' + msg);
     }
@@ -793,11 +805,13 @@ function renderProductList(q) {
 }
 
 // ================= 在庫計算 =================
-function computeStock() {
+// maxYM（yyyy-MM）を渡すと、その月までの記録だけで計算する（前月分の棚卸入力時の理論在庫用）
+function computeStock(maxYM) {
   const st = {};
   const k = (no, s) => no + '|' + s;
   for (const l of S.logs) {
     if (l.cancelled) continue;
+    if (maxYM && ymOf_(l.ts) > maxYM) continue;
     if (l.type === '入荷') st[k(l.productNo, l.store)] = (st[k(l.productNo, l.store)] || 0) + l.qty;
     else if (l.type === '業務転用') st[k(l.productNo, l.store)] = (st[k(l.productNo, l.store)] || 0) - l.qty;
     else if (l.type === '譲渡') {
@@ -1022,15 +1036,42 @@ let checkFilter = 'miss'; // 'miss'=未カウントのみ | 'all'
 function ymOf_(ts) { return String(ts || '').slice(0, 7).replace('/', '-'); }
 function currentYM_() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
 
-// 店舗ごとの棚卸状況マップ: productNo → {cur:今月の棚卸記録, prev:前回(今月より前)の棚卸記録}
+// ---- 月初の猶予期間（毎月1〜7日）----
+// 月末の棚卸が月をまたいでも続けられるよう、「前月分のつづき」か「今月分」かを選んで入力できる。
+// 前月分を選ぶと、棚卸表は前月の進捗を表示し、記録は前月末日の日付で保存される。
+let tanaTarget = 'prev'; // 猶予期間中のデフォルトは「前月分のつづき」（8日以降は自動で今月分のみ）
+function tanaGraceActive_() { return new Date().getDate() <= 7; }
+function prevYM_() { const d = new Date(); const p = new Date(d.getFullYear(), d.getMonth() - 1, 1); return p.getFullYear() + '-' + String(p.getMonth() + 1).padStart(2, '0'); }
+function prevMonthEnd_() { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 0); } // 前月の末日
+function tanaIsPrev_() { return tanaGraceActive_() && tanaTarget === 'prev'; }
+function tanaYM_() { return tanaIsPrev_() ? prevYM_() : currentYM_(); }
+function updateTanaMonthBar() {
+  const bar = $('tanaMonthBar');
+  if (!tanaGraceActive_()) { if (tanaTarget !== 'cur') tanaTarget = 'cur'; bar.style.display = 'none'; return; }
+  bar.style.display = 'block';
+  const pm = +prevYM_().slice(5), cm = +currentYM_().slice(5);
+  $('tanaPrevBtn').textContent = `${pm}月分のつづき`;
+  $('tanaCurBtn').textContent = `${cm}月分`;
+  $('tanaPrevBtn').classList.toggle('active', tanaTarget === 'prev');
+  $('tanaCurBtn').classList.toggle('active', tanaTarget === 'cur');
+  $('tanaMonthHint').textContent = tanaTarget === 'prev'
+    ? `${pm}月末の棚卸のつづき・数え直しはこちら。記録は${pm}月分（${pm}月末日の日付）として保存されます`
+    : `これから数える分は${cm}月の棚卸として記録されます`;
+}
+function setTanaTarget(t) { tanaTarget = t; renderCheck(); }
+$('tanaPrevBtn').onclick = () => setTanaTarget('prev');
+$('tanaCurBtn').onclick = () => setTanaTarget('cur');
+
+// 店舗ごとの棚卸状況マップ: productNo → {cur:対象月の棚卸記録, prev:前回(対象月より前)の棚卸記録}
+// 対象月は通常は今月。月初の猶予期間に「前月分のつづき」を選んでいるときは前月。
 function stocktakeMap(store) {
   const m = {};
-  const ym = currentYM_();
+  const ym = tanaYM_();
   for (const l of S.logs) {
     if (l.cancelled || l.type !== '棚卸' || l.store !== store) continue;
     const e = m[l.productNo] || (m[l.productNo] = { cur: null, prev: null });
     if (ymOf_(l.ts) === ym) e.cur = l;   // ログは時系列順なので最後の記録が残る
-    else e.prev = l;
+    else if (ymOf_(l.ts) < ym) e.prev = l;
   }
   return m;
 }
@@ -1054,6 +1095,7 @@ $('chkFilterEx').onclick = () => setCheckFilter('excluded');
 $('checkSearch').oninput = () => renderCheck();
 
 function renderCheck() {
+  updateTanaMonthBar();
   const store = $('storeSel').value;
   const q = ($('checkSearch').value || '').trim().toLowerCase();
   const m = stocktakeMap(store);
@@ -1135,7 +1177,7 @@ function renderCheck() {
   }
   const pct = total ? Math.round(done / total * 100) : 0;
   $('checkProgress').innerHTML =
-    `<span class="cnt">${esc(store)}：済 ${done} / ${total}（${pct}%）</span>
+    `<span class="cnt">${tanaGraceActive_() ? '【' + (+tanaYM_().slice(5)) + '月分】' : ''}${esc(store)}：済 ${done} / ${total}（${pct}%）</span>
      <div class="pbar"><div class="pfill" style="width:${pct}%"></div></div>` +
     ((excluded || dormant) ? `<div style="font-size:11px;color:#999;margin-top:3px">このほか ${[excluded ? `取扱なし ${excluded}商品` : '', dormant ? `前回在庫0 ${dormant}商品` : ''].filter(Boolean).join(' ／ ')} は表示していません（「取扱なし」タブで確認できます）</div>` : '');
   $('checkList').innerHTML = rows.join('') ||
@@ -1162,8 +1204,14 @@ function renderCheck() {
     const prev = prevStocktakeQty(p.productNo, store);
     if (prev > 0 && !confirm(`⚠️ 前回の棚卸では「${p.name}」は ${prev} 個ありました。\n本当に 0 個ですか？（数え忘れではないですか？）`)) return;
     btn.disabled = true;
-    const theo = computeStock()[p.productNo + '|' + store] || 0;
+    const theo = computeStock(tanaYM_())[p.productNo + '|' + store] || 0;
     const rec = { type: '棚卸', productNo: p.productNo, jan: p.jan, name: p.name, qty: 0, store: store, toStore: '', diff: 0 - theo, staff: staffValue(), memo: '' };
+    if (tanaIsPrev_()) {
+      const pe = prevMonthEnd_();
+      rec.eventDate = pe.getFullYear() + '-' + String(pe.getMonth() + 1).padStart(2, '0') + '-' + String(pe.getDate()).padStart(2, '0');
+      const n = new Date();
+      rec.memo = `実入力 ${n.getMonth() + 1}/${n.getDate()}`;
+    }
     try {
       const r = await api('saveRecord', rec);
       rec.row = r.row; rec.ts = r.ts; rec.cancelled = false;
@@ -1294,9 +1342,9 @@ function openSheet(product, scannedCode) {
   }
 
   if (mode === '棚卸' && product) {
-    const theo = computeStock()[product.productNo + '|' + store] || 0;
+    const theo = computeStock(tanaYM_())[product.productNo + '|' + store] || 0;
     $('shTheo').style.display = 'block';
-    $('shTheo').textContent = `理論在庫: ${theo} 個 → 数えた実数を入力してください`;
+    $('shTheo').textContent = (tanaIsPrev_() ? `【${+prevYM_().slice(5)}月分として記録】` : '') + `理論在庫: ${theo} 個 → 数えた実数を入力してください`;
     $('qtyInput').value = theo;
   } else if (mode === '業務転用') {
     $('shTheo').style.display = 'block';
@@ -1382,12 +1430,19 @@ $('shSave').onclick = async () => {
     memo: isBox ? (`${qty}箱×${bq}個` + (memoText ? '／' + memoText : '')) : memoText
   };
   if (mode === '棚卸') {
-    const theo = computeStock()[p.productNo + '|' + store] || 0;
+    const theo = computeStock(tanaYM_())[p.productNo + '|' + store] || 0;
     rec.diff = qty - theo;
     // 数え忘れアラート：前回は在庫があったのに今回0
     if (qty === 0) {
       const prev = prevStocktakeQty(p.productNo, store);
       if (prev > 0 && !confirm(`⚠️ 前回の棚卸では「${p.name}」は ${prev} 個ありました。\n本当に 0 個ですか？（数え忘れではないですか？）`)) return;
+    }
+    // 前月分のつづきとして入力中は、前月末日の日付で記録する（実際に入力した日はメモに残す）
+    if (tanaIsPrev_()) {
+      const pe = prevMonthEnd_();
+      rec.eventDate = pe.getFullYear() + '-' + String(pe.getMonth() + 1).padStart(2, '0') + '-' + String(pe.getDate()).padStart(2, '0');
+      const n = new Date();
+      rec.memo = (rec.memo ? rec.memo + '／' : '') + `実入力 ${n.getMonth() + 1}/${n.getDate()}`;
     }
   }
   if (mode === '譲渡' && !rec.toStore) { toast('譲渡先を選択してください'); return; }
@@ -1395,7 +1450,9 @@ $('shSave').onclick = async () => {
   // ===== 楽観保存: 画面には即反映して閉じ、サーバー送信は裏で行う（待ち時間ゼロ） =====
   rec.cancelled = false;
   rec.row = null; // サーバー保存が終わるまで行番号なし（取消はその間ガードされる）
-  rec.ts = new Date().toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  rec.ts = rec.eventDate
+    ? rec.eventDate.replace(/-/g, '/') + ' 12:00' // 日付指定の記録（前月分の棚卸・譲渡の貸借日）はその日付で表示
+    : new Date().toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
   S.logs.push(rec);
   toast(mode === '棚卸'
     ? `記録しました（差異 ${rec.diff > 0 ? '+' : ''}${rec.diff}）`
