@@ -243,7 +243,7 @@
     <button type="button" id="chkFilterAll">すべて</button>
     <button type="button" id="chkFilterEx">取扱なし</button>
   </div>
-  <input id="checkSearch" placeholder="商品名・カテゴリで絞り込み" autocomplete="off" style="width:100%;padding:10px;font-size:15px;border:1px solid var(--border);border-radius:10px">
+  <input id="checkSearch" placeholder="商品名・ブランド・カテゴリで絞り込み" autocomplete="off" style="width:100%;padding:10px;font-size:15px;border:1px solid var(--border);border-radius:10px">
   <div id="checkList" style="margin-top:10px"></div>
   <p class="hint">今月まだ棚卸していない商品が赤く表示されます。商品が無い棚は「0」ボタンで即記録。行をタップすると数量を入力できます（自動で棚卸モードになります）。</p>
 </div>
@@ -309,7 +309,7 @@
       <button type="button" id="regModeNew" style="flex:0 0 auto;font-size:11px;font-weight:400;padding:6px 10px;align-self:center;opacity:.8">新規登録</button>
     </div>
     <div id="regBindArea">
-      <input id="bindSearch" placeholder="商品名・メーカーで検索" autocomplete="off">
+      <input id="bindSearch" placeholder="商品名・ブランド・カテゴリで検索" autocomplete="off">
       <div id="bindList" style="max-height:180px;overflow-y:auto;margin-top:6px"></div>
       <div id="bindChosen" class="theo" style="display:none"></div>
       <p class="hint" style="margin-top:6px">探しても見つからないときは、無理に登録せず本部（若月）までご連絡ください</p>
@@ -317,6 +317,14 @@
     <div id="regNewArea" style="display:none">
       <input id="regNo" placeholder="商品番号（空欄なら自動で付きます）" style="margin-bottom:6px">
       <input id="regName" placeholder="商品名" style="margin-bottom:6px">
+      <!-- 分類＞カテゴリ＞ブランド（棚卸表の出力と同じ3階層） -->
+      <div class="unit-row" style="margin-bottom:6px">
+        <button type="button" id="regKindRetail" class="active">店販</button>
+        <button type="button" id="regKindPro">業務</button>
+      </div>
+      <select id="regCat" style="width:100%;padding:10px;font-size:15px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;background:#fff"></select>
+      <input id="regBrand" list="brandList" placeholder="ブランド（例: オージュア、ナプラ）" autocomplete="off" style="margin-bottom:6px">
+      <datalist id="brandList"></datalist>
       <input id="regBox" type="number" inputmode="numeric" min="0" placeholder="1箱あたりの個数（箱で入荷する商品のみ・任意）">
     </div>
   </div>
@@ -347,10 +355,10 @@ const demo = {
     if (d) return JSON.parse(d);
     return {
       products: [
-        { productNo: 'S001', jan: '4901234567894', name: 'シャンプー 300ml', category: 'ヘアケア', price: 2800, boxQty: 10 },
-        { productNo: 'S002', jan: '4901234567900', name: 'トリートメント 250g', category: 'ヘアケア', price: 3200, boxQty: 8, noBarcode: true },
-        { productNo: 'S003', jan: '', name: 'ヘアオイル 100ml（バーコード無し）', category: 'スタイリング', price: 2400, boxQty: 0 },
-        { productNo: 'S004', jan: '', name: '量り売りトリートメント 100g', category: 'トリートメント', price: 1800, boxQty: 0 }
+        { productNo: 'S001', jan: '4901234567894', name: 'シャンプー 300ml', category: 'シャンプー', brand: 'デモ', kind: '店販', price: 2800, boxQty: 10 },
+        { productNo: 'S002', jan: '4901234567900', name: 'トリートメント 250g', category: 'トリートメント', brand: 'デモ', kind: '店販', price: 3200, boxQty: 8, noBarcode: true },
+        { productNo: 'S003', jan: '', name: 'ヘアオイル 100ml（バーコード無し）', category: 'アウトバス', brand: 'デモ', kind: '店販', price: 2400, boxQty: 0 },
+        { productNo: 'S004', jan: '', name: '量り売りトリートメント 100g', category: 'トリートメント', brand: 'デモ', kind: '業務', price: 1800, boxQty: 0 }
       ],
       stores: [
         'sand 銀座 【サンド ギンザ】',
@@ -856,6 +864,19 @@ function renderHistory() {
   });
 }
 
+// ================= 分類・カテゴリ・ブランド =================
+// 商品の3階層: 分類（店販/業務）＞ カテゴリ ＞ ブランド。※ Code.gs の KIND_LIST / CATEGORY_LIST と同じ内容にしておくこと
+const KIND_LIST = ['店販', '業務'];
+const CATEGORY_LIST = ['シャンプー', 'トリートメント', 'アウトバス', 'スタイリング', 'ケア', 'コテ・アイロン・ドライヤー',
+  'カラー剤', 'パーマ剤・ストレート剤', '処理剤', '備品・消耗品', 'その他'];
+function catRank(c) { const i = CATEGORY_LIST.indexOf(c); return i === -1 ? CATEGORY_LIST.length : i; }
+// 一覧の小さい文字に出す「カテゴリ｜ブランド」
+function catLabel(p) { return [p.category, p.brand].filter(x => String(x || '').trim()).join('｜'); }
+// 絞り込み検索: 商品名・カテゴリ・ブランド・分類・商品番号のどれかに当たればOK
+function matchProduct(p, q) {
+  return !q || [p.name, p.category, p.brand, p.kind, p.productNo].some(x => String(x || '').toLowerCase().includes(q));
+}
+
 // ================= バーコード無し商品ピッカー（カテゴリ → 画像タイル） =================
 let pickerCat = null;
 
@@ -883,7 +904,7 @@ function renderPicker() {
     $('pickerBody').innerHTML = '<p class="hint" style="padding:24px 16px">バーコード無しの商品がまだ登録されていません。<br>商品マスタでJANコード列を空にした商品がここに表示されます。</p>';
     return;
   }
-  const cats = [...new Set(items.map(p => p.category || 'その他'))];
+  const cats = [...new Set(items.map(p => p.category || 'その他'))].sort((a, b) => catRank(a) - catRank(b));
 
   if (pickerCat === null && cats.length > 1) {
     // Step1: カテゴリ選択
@@ -898,7 +919,8 @@ function renderPicker() {
 
   // Step2: 商品を画像タイルで選択（カテゴリが1つだけなら直接ここに来る）
   const cat = pickerCat !== null ? pickerCat : cats[0];
-  const list = items.filter(p => (p.category || 'その他') === cat);
+  const list = items.filter(p => (p.category || 'その他') === cat)
+    .sort((a, b) => String(a.brand || '').localeCompare(String(b.brand || ''), 'ja') || a.name.localeCompare(b.name, 'ja'));
   $('pickerTitle').textContent = cat;
   $('pickerBody').innerHTML = '<div class="pgrid">' + list.map(p => {
     const img = p.imageUrl
@@ -906,7 +928,7 @@ function renderPicker() {
       : '<div class="ph">🧴</div>';
     return `<div class="prod-card" data-i="${S.products.indexOf(p)}">${img}
       <div class="nm2">${esc(p.name)}</div>
-      <div class="pr">${p.price ? '¥' + esc(p.price) : ''}</div></div>`;
+      <div class="pr">${esc(p.brand || '')}</div></div>`;
   }).join('') + '</div>';
   document.querySelectorAll('.prod-card').forEach(el => el.onclick = () => {
     openSheet(S.products[+el.dataset.i], ''); // 個数入力→保存はスキャン時と同じ確認シート
@@ -1129,7 +1151,7 @@ function renderCheck() {
   const rows = [];
   const LIMIT = 400;
   let hidden = 0;
-  const matchQ = p => !q || p.name.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q) || p.productNo.toLowerCase().includes(q);
+  const matchQ = p => matchProduct(p, q);
   for (const p of S.products) {
     if (isExcluded(p)) {
       excluded++;
@@ -1137,7 +1159,7 @@ function renderCheck() {
       if (checkFilter === 'excluded' && matchQ(p)) {
         if (rows.length >= LIMIT) { hidden++; continue; }
         rows.push(`<div class="citem ex" data-no="${esc(p.productNo)}">
-           <div><div class="nm">${esc(p.name)}</div><div class="sub">${esc(p.category || '')}｜過去3ヶ月在庫0のため対象外</div></div>
+           <div><div class="nm">${esc(p.name)}</div><div class="sub">${esc(catLabel(p))}｜過去3ヶ月在庫0のため対象外</div></div>
            <div class="st">取扱なし</div>
          </div>`);
       }
@@ -1148,7 +1170,7 @@ function renderCheck() {
       if (checkFilter === 'excluded' && matchQ(p)) {
         if (rows.length >= LIMIT) { hidden++; continue; }
         rows.push(`<div class="citem ex" data-no="${esc(p.productNo)}">
-           <div><div class="nm">${esc(p.name)}</div><div class="sub">${esc(p.category || '')}｜前回の棚卸が0個（その後の動きなし）のため非表示</div></div>
+           <div><div class="nm">${esc(p.name)}</div><div class="sub">${esc(catLabel(p))}｜前回の棚卸が0個（その後の動きなし）のため非表示</div></div>
            <div class="st">在庫0</div>
          </div>`);
       }
@@ -1163,7 +1185,7 @@ function renderCheck() {
     if (!matchQ(p)) continue;
     if (rows.length >= LIMIT) { hidden++; continue; }
     const prev = e && e.prev ? e.prev.qty : null;
-    const sub = `${esc(p.category || '')}${prev !== null ? '｜前回 ' + prev + '個' : ''}`;
+    const sub = `${esc(catLabel(p))}${prev !== null ? '｜前回 ' + prev + '個' : ''}`;
     rows.push(counted
       ? `<div class="citem done" data-no="${esc(p.productNo)}">
            <div><div class="nm">${esc(p.name)}</div><div class="sub">${sub}</div></div>
@@ -1227,6 +1249,20 @@ function renderCheck() {
 
 // ================= 未登録バーコード：既存商品への紐づけ =================
 let regMode = 'bind';   // 'bind'（既存に紐づけ）| 'new'（新規登録）
+let regKind = '店販';   // 新規登録する商品の分類
+function setRegKind(k) {
+  regKind = k;
+  $('regKindRetail').classList.toggle('active', k === '店販');
+  $('regKindPro').classList.toggle('active', k === '業務');
+}
+$('regKindRetail').onclick = () => setRegKind('店販');
+$('regKindPro').onclick = () => setRegKind('業務');
+$('regCat').innerHTML = '<option value="">カテゴリを選択（必須）</option>' + CATEGORY_LIST.map(c => `<option>${c}</option>`).join('');
+// ブランド欄の入力候補: マスタに登録済みのブランド（表記ゆれ防止）
+function fillBrandList() {
+  const brands = [...new Set(S.products.map(p => String(p.brand || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ja'));
+  $('brandList').innerHTML = brands.map(b => `<option value="${esc(b)}">`).join('');
+}
 let bindTarget = null;  // 紐づけ先に選んだ商品
 
 function setRegMode(m) {
@@ -1251,13 +1287,13 @@ function renderBindList(q) {
   q = (q || '').trim().toLowerCase();
   // JAN未登録の商品を優先して表示（紐づけ候補として一番ありえるため）
   const list = S.products
-    .filter(p => !q || p.name.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q) || p.productNo.toLowerCase().includes(q))
+    .filter(p => matchProduct(p, q))
     .sort((a, b) => (String(a.jan).trim() ? 1 : 0) - (String(b.jan).trim() ? 1 : 0))
     .slice(0, 30);
   $('bindList').innerHTML = list.map(p => `
     <div class="pitem" data-no="${esc(p.productNo)}" style="padding:8px 10px;margin-bottom:6px">
       <div><div class="nm" style="font-size:13px">${esc(p.name)}</div>
-      <div class="sub">${esc(p.category || '')}${String(p.jan).trim() ? '｜JAN登録済' : ''}</div></div>
+      <div class="sub">${esc(catLabel(p))}${String(p.jan).trim() ? '｜JAN登録済' : ''}</div></div>
     </div>`).join('') || '<p class="hint">該当する商品がありません</p>';
   $('bindList').querySelectorAll('.pitem').forEach(el => el.onclick = () => {
     bindTarget = S.products.find(p => p.productNo === el.dataset.no);
@@ -1325,6 +1361,7 @@ function openSheet(product, scannedCode) {
     $('shCode').textContent = 'スキャンしたコード: ' + scannedCode;
     $('regFields').style.display = 'block';
     $('regNo').value = ''; $('regName').value = ''; $('regBox').value = '';
+    $('regCat').value = ''; $('regBrand').value = ''; setRegKind('店販'); fillBrandList();
     bindTarget = null;
     $('bindChosen').style.display = 'none';
     $('bindSearch').value = '';
@@ -1402,12 +1439,14 @@ $('shSave').onclick = async () => {
       let no = $('regNo').value.trim();
       const nm = $('regName').value.trim();
       if (!nm) { toast('商品名を入力してください'); return; }
+      const regCat = $('regCat').value;
+      if (!regCat) { toast('カテゴリを選択してください'); return; }
       if (!no) {
         // 商品番号が空欄なら自動採番：スキャンしたバーコードをそのまま使う（既存の運用と同じ）
         no = current.jan || ('N' + Date.now());
         if (S.products.some(x => x.productNo === no)) no = no + '-' + Math.floor(Math.random() * 900 + 100);
       }
-      p = { productNo: no, jan: current.jan || '', name: nm, category: '', price: '', boxQty: parseInt($('regBox').value, 10) || 0 };
+      p = { productNo: no, jan: current.jan || '', name: nm, category: regCat, brand: $('regBrand').value.trim(), kind: regKind, price: '', boxQty: parseInt($('regBox').value, 10) || 0 };
       // マスタ登録も裏で送る（失敗したら通知）。画面は待たせない
       api('registerProduct', p).catch(e => toast('⚠️ 商品マスタへの登録に失敗: ' + nm + '（' + e.message + '）'));
       S.products.push(p);
